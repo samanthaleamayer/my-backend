@@ -16,9 +16,24 @@ const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
 
 // Middleware
 app.use(cors({
-  origin: ['http://localhost:3000', 'http://127.0.0.1:3000', 'http://localhost:8080'],
-  credentials: true
-}));
+     origin: function (origin, callback) {
+       // Allow requests with no origin (mobile apps, Postman, etc.)
+       if (!origin) return callback(null, true);
+       
+       // Allow localhost for development
+       if (origin.includes('localhost') || origin.includes('127.0.0.1')) {
+         return callback(null, true);
+       }
+       
+       // Allow any Netlify domain
+       if (origin.includes('.netlify.app')) {
+         return callback(null, true);
+       }
+       
+       return callback(new Error('Not allowed by CORS'));
+     },
+     credentials: true
+   }));
 app.use(express.json());
 app.use(express.static('public'));
 
@@ -350,5 +365,6 @@ app.listen(PORT, () => {
   console.log(`📊 Health check: http://localhost:${PORT}/health`);
   console.log(`🗄️  Database test: http://localhost:${PORT}/api/test-db`);
 });
+
 
 module.exports = app;
