@@ -101,7 +101,7 @@ app.post('/api/login', async (req, res) => {
       data: {
         user,
         provider,
-        dashboardUrl: `https://my-backend-kwgq.onrender.com/provider-dashboard.html?providerId=${provider.id}&email=${email}`
+        dashboardUrl: `https://zesty-entremet-6f685b.netlify.app//provider-dashboard.html?providerId=${provider.id}&email=${email}`
       }
     });
 
@@ -683,5 +683,6 @@ app.listen(PORT, () => {
 });
 
 module.exports = app;
+
 
 
