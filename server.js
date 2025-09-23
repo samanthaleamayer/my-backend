@@ -51,6 +51,69 @@ app.get('/debug/check', (req, res) => {
   });
 });
 
+// Provider Login Endpoint
+app.post('/api/login', async (req, res) => {
+  try {
+    console.log('Provider login request:', req.body);
+    const { email } = req.body;
+
+    if (!email) {
+      return res.status(400).json({
+        success: false,
+        error: 'Email is required'
+      });
+    }
+
+    // Find user by email
+    const { data: user, error: userError } = await supabase
+      .from('users')
+      .select('id, email, full_name, role')
+      .eq('email', email)
+      .eq('role', 'provider')
+      .single();
+
+    if (userError || !user) {
+      return res.status(404).json({ 
+        success: false, 
+        error: 'No provider account found with that email address' 
+      });
+    }
+
+    // Find provider profile
+    const { data: provider, error: providerError } = await supabase
+      .from('providers')
+      .select('*')
+      .eq('user_id', user.id)
+      .single();
+
+    if (providerError || !provider) {
+      return res.status(404).json({ 
+        success: false, 
+        error: 'Provider profile not found' 
+      });
+    }
+
+    console.log('Login successful for:', email, 'Provider ID:', provider.id);
+
+    res.json({
+      success: true,
+      message: 'Login successful',
+      data: {
+        user,
+        provider,
+        dashboardUrl: `https://my-backend-kwgq.onrender.com/provider-dashboard.html?providerId=${provider.id}&email=${email}`
+      }
+    });
+
+  } catch (error) {
+    console.error('Login error:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Login failed: ' + error.message
+    });
+  }
+});
+
 // Test Supabase connection
 app.get('/api/test-db', async (req, res) => {
   try {
@@ -683,4 +746,5 @@ app.listen(PORT, () => {
 });
 
 module.exports = app;
+
 
