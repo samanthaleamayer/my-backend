@@ -47,7 +47,7 @@ app.get('/debug/check', (req, res) => {
   res.json({ 
     message: 'Server updated successfully',
     timestamp: new Date().toISOString(),
-    version: 'fixed-provider-query-v3'
+    version: 'fixed-provider-query-v4'
   });
 });
 
@@ -101,7 +101,7 @@ app.post('/api/login', async (req, res) => {
       data: {
         user,
         provider,
-        dashboardUrl: `https://zesty-entremet-6f685b.netlify.app//provider-dashboard.html?providerId=${provider.id}&email=${email}`
+        dashboardUrl: `https://zesty-entremet-6f685b.netlify.app/provider-dashboard.html?providerId=${provider.id}&email=${email}`
       }
     });
 
@@ -220,8 +220,8 @@ app.post('/api/providers/register', async (req, res) => {
         // Create onboarding link
         const accountLink = await stripe.accountLinks.create({
           account: account.id,
-          refresh_url: 'https://my-backend-kwgq.onrender.com/provider-dashboard.html',
-          return_url: 'https://my-backend-kwgq.onrender.com/provider-dashboard.html',
+          refresh_url: 'https://zesty-entremet-6f685b.netlify.app/provider-dashboard.html',
+          return_url: 'https://zesty-entremet-6f685b.netlify.app/provider-dashboard.html',
           type: 'account_onboarding',
         });
 
@@ -331,7 +331,7 @@ app.post('/api/providers/register', async (req, res) => {
         user: userData,
         provider: providerData,
         stripeOnboardingUrl,
-        dashboardUrl: `https://my-backend-kwgq.onrender.com/provider-dashboard.html?providerId=${providerData.id}&email=${email}`
+        dashboardUrl: `https://zesty-entremet-6f685b.netlify.app/provider-dashboard.html?providerId=${providerData.id}&email=${email}`
       }
     });
 
@@ -683,6 +683,3 @@ app.listen(PORT, () => {
 });
 
 module.exports = app;
-
-
-
