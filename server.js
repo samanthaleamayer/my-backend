@@ -60,12 +60,16 @@ app.get('/api/test-db', async (req, res) => {
 });
 
 // =================================
-// PROVIDER REGISTRATION (WORKING)
+// PROVIDER REGISTRATION (WITH DEBUG LOGGING)
 // =================================
 
 app.post('/api/providers/register', async (req, res) => {
   try {
-    console.log('Provider registration request:', req.body);
+    console.log('=== PROVIDER REGISTRATION DEBUG ===');
+    console.log('Full request body:', JSON.stringify(req.body, null, 2));
+    console.log('Services in request:', req.body.services);
+    console.log('Services array length:', req.body.services?.length || 0);
+    console.log('Services type:', typeof req.body.services);
     
     const {
       fullName, email, phone, dateOfBirth, profilePhoto, bio,
@@ -74,6 +78,15 @@ app.post('/api/providers/register', async (req, res) => {
       yearsInBusiness, serviceRadius, regNumber, taxId, website,
       insurance, services, bankCountry, agreeToStripeTerms
     } = req.body;
+
+    console.log('Extracted services:', services);
+    console.log('Services is array?', Array.isArray(services));
+    if (Array.isArray(services)) {
+      console.log('Individual services:');
+      services.forEach((service, index) => {
+        console.log(`Service ${index}:`, service);
+      });
+    }
 
     // Validate required fields
     if (!fullName || !email || !phone || !businessName) {
@@ -109,6 +122,8 @@ app.post('/api/providers/register', async (req, res) => {
       created_at: new Date().toISOString()
     };
 
+    console.log('Creating user with data:', userData);
+
     const { data: createdUser, error: userError } = await supabase
       .from('users')
       .insert([userData])
@@ -123,12 +138,15 @@ app.post('/api/providers/register', async (req, res) => {
       });
     }
 
+    console.log('User created successfully:', createdUser);
+
     // Create Stripe account if requested
     let stripeAccountId = null;
     let stripeOnboardingUrl = null;
 
     if (agreeToStripeTerms && bankCountry) {
       try {
+        console.log('Creating Stripe account...');
         const account = await stripe.accounts.create({
           type: 'express',
           country: bankCountry,
@@ -139,6 +157,7 @@ app.post('/api/providers/register', async (req, res) => {
           }
         });
         stripeAccountId = account.id;
+        console.log('Stripe account created:', stripeAccountId);
 
         const accountLink = await stripe.accountLinks.create({
           account: account.id,
@@ -147,6 +166,7 @@ app.post('/api/providers/register', async (req, res) => {
           type: 'account_onboarding',
         });
         stripeOnboardingUrl = accountLink.url;
+        console.log('Stripe onboarding URL created');
       } catch (stripeError) {
         console.error('Stripe account creation error:', stripeError);
       }
@@ -174,6 +194,8 @@ app.post('/api/providers/register', async (req, res) => {
       created_at: new Date().toISOString()
     };
 
+    console.log('Creating provider with data:', providerData);
+
     const { data: createdProvider, error: providerError } = await supabase
       .from('providers')
       .insert([providerData])
@@ -189,25 +211,59 @@ app.post('/api/providers/register', async (req, res) => {
       });
     }
 
-    // Add services using your exact field names
-    if (services && services.length > 0) {
-      const servicesData = services.map(service => ({
-        provider_id: createdProvider.id,
-        name: service.name,
-        category: service.category,
-        subcategory: service.subCategory,
-        duration_minutes: service.duration,
-        duration: service.duration,
-        price: service.price,
-        description: service.description || '',
-        is_active: true,
-        created_at: new Date().toISOString()
-      }));
+    console.log('Provider created successfully:', createdProvider);
 
-      await supabase.from('services').insert(servicesData);
+    // Add services using your exact field names
+    console.log('=== SERVICES PROCESSING ===');
+    console.log('Services to process:', services);
+    console.log('Provider ID for services:', createdProvider.id);
+
+    if (services && Array.isArray(services) && services.length > 0) {
+      console.log(`Processing ${services.length} services...`);
+      
+      const servicesData = services.map((service, index) => {
+        console.log(`Processing service ${index}:`, service);
+        
+        const serviceData = {
+          provider_id: createdProvider.id,
+          name: service.name,
+          category: service.category,
+          subcategory: service.subCategory || service.subcategory,
+          duration_minutes: service.duration,
+          duration: service.duration,
+          price: service.price,
+          description: service.description || '',
+          is_active: true,
+          created_at: new Date().toISOString()
+        };
+        
+        console.log(`Service data ${index}:`, serviceData);
+        return serviceData;
+      });
+
+      console.log('All services data prepared:', servicesData);
+
+      const { data: insertedServices, error: servicesError } = await supabase
+        .from('services')
+        .insert(servicesData)
+        .select();
+
+      if (servicesError) {
+        console.error('Error inserting services:', servicesError);
+        console.error('Services data that failed:', servicesData);
+      } else {
+        console.log('Services inserted successfully:', insertedServices);
+        console.log(`${insertedServices.length} services inserted`);
+      }
+    } else {
+      console.log('No services to insert - services array is empty or not an array');
+      console.log('Services value:', services);
+      console.log('Services type:', typeof services);
+      console.log('Is array?', Array.isArray(services));
     }
 
     // Create default business hours
+    console.log('Creating default business hours...');
     const defaultBusinessHours = [
       { day_of_week: 1, is_open: true, open_time: '09:00', close_time: '17:00' },
       { day_of_week: 2, is_open: true, open_time: '09:00', close_time: '17:00' },
@@ -223,13 +279,20 @@ app.post('/api/providers/register', async (req, res) => {
       ...hour
     }));
 
-    await supabase.from('business_hours').insert(businessHoursData);
+    const { error: hoursError } = await supabase
+      .from('business_hours')
+      .insert(businessHoursData);
 
-    console.log('Provider registration successful:', {
-      userId: createdUser.id,
-      providerId: createdProvider.id,
-      stripeAccountId
-    });
+    if (hoursError) {
+      console.error('Error creating business hours:', hoursError);
+    } else {
+      console.log('Business hours created successfully');
+    }
+
+    console.log('=== REGISTRATION COMPLETED SUCCESSFULLY ===');
+    console.log('User ID:', createdUser.id);
+    console.log('Provider ID:', createdProvider.id);
+    console.log('Stripe Account ID:', stripeAccountId);
 
     res.json({
       success: true,
@@ -243,7 +306,8 @@ app.post('/api/providers/register', async (req, res) => {
     });
 
   } catch (error) {
-    console.error('Provider registration error:', error);
+    console.error('=== REGISTRATION ERROR ===');
+    console.error('Error details:', error);
     res.status(500).json({
       success: false,
       error: 'Internal server error: ' + error.message
@@ -307,11 +371,14 @@ app.post('/api/login', async (req, res) => {
 });
 
 // =================================
-// PROVIDER PROFILE ENDPOINTS (FIXED)
+// PROVIDER PROFILE ENDPOINTS (WITH DEBUG)
 // =================================
 
 app.get('/api/providers/:id/complete', async (req, res) => {
   try {
+    console.log('=== FETCHING COMPLETE PROVIDER DATA ===');
+    console.log('Provider ID:', req.params.id);
+
     // Get provider data separately to avoid JOIN issues
     const { data: provider, error: providerError } = await supabase
       .from('providers')
@@ -319,10 +386,16 @@ app.get('/api/providers/:id/complete', async (req, res) => {
       .eq('id', req.params.id)
       .single();
 
-    if (providerError) throw providerError;
+    if (providerError) {
+      console.error('Provider fetch error:', providerError);
+      throw providerError;
+    }
     if (!provider) {
+      console.log('No provider found with ID:', req.params.id);
       return res.status(404).json({ success: false, error: 'Provider not found' });
     }
+
+    console.log('Provider data retrieved:', provider);
 
     // Get user data separately
     const { data: user, error: userError } = await supabase
@@ -334,13 +407,22 @@ app.get('/api/providers/:id/complete', async (req, res) => {
     if (userError) {
       console.error('User fetch error:', userError);
       // Continue without user data
+    } else {
+      console.log('User data retrieved');
     }
 
-    // Get services separately
+    // Get services separately - THIS IS THE KEY DEBUG
+    console.log('Fetching services for provider_id:', req.params.id);
     const { data: services, error: servicesError } = await supabase
       .from('services')
       .select('*')
       .eq('provider_id', req.params.id);
+
+    console.log('Services query result:', { services, servicesError });
+    console.log('Number of services found:', services?.length || 0);
+    if (services && services.length > 0) {
+      console.log('Services details:', services);
+    }
 
     if (servicesError) {
       console.error('Services fetch error:', servicesError);
@@ -375,10 +457,41 @@ app.get('/api/providers/:id/complete', async (req, res) => {
       business_hours: businessHours || []
     };
 
+    console.log('Combined data services count:', combinedData.services.length);
+
     res.json({ success: true, data: combinedData });
     
   } catch (error) {
     console.error('Error fetching complete provider data:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// =================================
+// SERVICES ENDPOINTS (WITH DEBUG)
+// =================================
+
+app.get('/api/providers/:id/services', async (req, res) => {
+  try {
+    console.log('=== FETCHING PROVIDER SERVICES ===');
+    console.log('Provider ID:', req.params.id);
+
+    const { data, error } = await supabase
+      .from('services')
+      .select('*')
+      .eq('provider_id', req.params.id);
+
+    console.log('Services query result:', { data, error });
+    console.log('Number of services found:', data?.length || 0);
+
+    if (error) {
+      console.error('Services fetch error:', error);
+      throw error;
+    }
+
+    res.json({ success: true, data: data || [] });
+  } catch (error) {
+    console.error('Error fetching services:', error);
     res.status(500).json({ success: false, error: error.message });
   }
 });
@@ -638,24 +751,6 @@ app.put('/api/bookings/:id/status', async (req, res) => {
 });
 
 // =================================
-// SERVICES ENDPOINTS
-// =================================
-
-app.get('/api/providers/:id/services', async (req, res) => {
-  try {
-    const { data, error } = await supabase
-      .from('services')
-      .select('*')
-      .eq('provider_id', req.params.id);
-
-    if (error) throw error;
-    res.json({ success: true, data });
-  } catch (error) {
-    res.status(500).json({ success: false, error: error.message });
-  }
-});
-
-// =================================
 // UTILITY FUNCTIONS
 // =================================
 
@@ -701,6 +796,7 @@ app.listen(PORT, () => {
   console.log(`📊 Health check: http://localhost:${PORT}/health`);
   console.log(`🗄️ Database test: http://localhost:${PORT}/api/test-db`);
   console.log(`📅 Calendar system fixed for your actual database schema!`);
+  console.log(`🐛 Debug logging enabled for registration and services`);
 });
 
 module.exports = app;
