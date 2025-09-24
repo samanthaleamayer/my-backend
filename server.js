@@ -84,6 +84,525 @@ app.post('/api/providers/register', async (req, res) => {
       });
     }
 
+    // Upload provider photos/profile pictures
+app.post('/api/providers/upload-image', upload.single('image'), async (req, res) => {
+  try {
+    const { providerId, imageType, setAsProfile } = req.body;
+    const file = req.file;
+    
+    if (!file) {
+      return res.status(400).json({ success: false, error: 'No image file provided' });
+    }
+    
+    // Upload to your preferred storage (AWS S3, Cloudinary, etc.)
+    // For now, storing locally - you'll need to implement cloud storage
+    const fileName = `${providerId}_${Date.now()}_${file.originalname}`;
+    const imagePath = `/uploads/providers/${fileName}`;
+    
+    // Save file info to database
+    const { data, error } = await supabase
+      .from('provider_photos')
+      .insert({
+        provider_id: providerId,
+        image_url: imagePath,
+        image_type: imageType,
+        is_profile: setAsProfile === 'true',
+        file_name: fileName,
+        file_size: file.size,
+        mime_type: file.mimetype
+      })
+      .select()
+      .single();
+    
+    if (error) throw error;
+    
+    // If setting as profile, update user record and unset other profile pics
+    if (setAsProfile === 'true') {
+      // Unset other profile pictures
+      await supabase
+        .from('provider_photos')
+        .update({ is_profile: false })
+        .eq('provider_id', providerId)
+        .neq('id', data.id);
+      
+      // Update user profile_photo_url
+      await supabase
+        .from('users')
+        .update({ profile_photo_url: imagePath })
+        .eq('id', providerId);
+    }
+    
+    res.json({ 
+      success: true, 
+      imageUrl: imagePath,
+      photoId: data.id
+    });
+    
+  } catch (error) {
+    console.error('Image upload error:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// Get provider photos
+app.get('/api/providers/:providerId/photos', async (req, res) => {
+  try {
+    const { providerId } = req.params;
+    
+    const { data, error } = await supabase
+      .from('provider_photos')
+      .select('*')
+      .eq('provider_id', providerId)
+      .order('created_at', { ascending: false });
+    
+    if (error) throw error;
+    
+    res.json({ success: true, data: data || [] });
+    
+  } catch (error) {
+    console.error('Get photos error:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// Set profile picture
+app.post('/api/providers/:providerId/set-profile-picture', async (req, res) => {
+  try {
+    const { providerId } = req.params;
+    const { photoId } = req.body;
+    
+    // Unset all other profile pictures for this provider
+    await supabase
+      .from('provider_photos')
+      .update({ is_profile: false })
+      .eq('provider_id', providerId);
+    
+    // Set the selected photo as profile
+    const { data, error } = await supabase
+      .from('provider_photos')
+      .update({ is_profile: true })
+      .eq('id', photoId)
+      .eq('provider_id', providerId)
+      .select()
+      .single();
+    
+    if (error) throw error;
+    
+    // Update user record
+    await supabase
+      .from('users')
+      .update({ profile_photo_url: data.image_url })
+      .eq('id', providerId);
+    
+    res.json({ success: true, data });
+    
+  } catch (error) {
+    console.error('Set profile picture error:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// Delete photo
+app.delete('/api/providers/photos/:photoId', async (req, res) => {
+  try {
+    const { photoId } = req.params;
+    
+    const { data, error } = await supabase
+      .from('provider_photos')
+      .delete()
+      .eq('id', photoId)
+      .select()
+      .single();
+    
+    if (error) throw error;
+    
+    // TODO: Delete actual file from storage
+    
+    res.json({ success: true });
+    
+  } catch (error) {
+    console.error('Delete photo error:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// ============================================================================
+// ENHANCED CALENDAR ENDPOINTS
+// ============================================================================
+
+// Block time (enhanced with recurring)
+app.post('/api/providers/block-time', async (req, res) => {
+  try {
+    const { providerId, type, reason, date, startTime, endTime, pattern, startDate, endDate, customDays } = req.body;
+    
+    if (type === 'single') {
+      // Single block
+      const { data, error } = await supabase
+        .from('blocked_time')
+        .insert({
+          provider_id: providerId,
+          date: date,
+          start_time: startTime,
+          end_time: endTime,
+          reason: reason,
+          type: 'single'
+        });
+      
+      if (error) throw error;
+      
+    } else if (type === 'recurring') {
+      // Recurring blocks - generate multiple entries
+      const start = new Date(startDate);
+      const end = new Date(endDate);
+      const blocks = [];
+      
+      while (start <= end) {
+        let shouldAdd = false;
+        
+        switch (pattern) {
+          case 'daily':
+            shouldAdd = true;
+            break;
+          case 'weekly':
+            shouldAdd = start.getDay() === new Date(startDate).getDay();
+            break;
+          case 'weekdays':
+            shouldAdd = start.getDay() >= 1 && start.getDay() <= 5;
+            break;
+          case 'weekends':
+            shouldAdd = start.getDay() === 0 || start.getDay() === 6;
+            break;
+          case 'custom':
+            shouldAdd = customDays && customDays.includes(start.getDay());
+            break;
+        }
+        
+        if (shouldAdd) {
+          blocks.push({
+            provider_id: providerId,
+            date: start.toISOString().split('T')[0],
+            start_time: startTime,
+            end_time: endTime,
+            reason: reason,
+            type: 'recurring',
+            pattern: pattern
+          });
+        }
+        
+        start.setDate(start.getDate() + 1);
+      }
+      
+      if (blocks.length > 0) {
+        const { error } = await supabase
+          .from('blocked_time')
+          .insert(blocks);
+        
+        if (error) throw error;
+      }
+    }
+    
+    res.json({ success: true });
+    
+  } catch (error) {
+    console.error('Block time error:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// Get provider stats (enhanced)
+app.get('/api/providers/:providerId/stats', async (req, res) => {
+  try {
+    const { providerId } = req.params;
+    const { period, month, year } = req.query;
+    
+    let dateFilter = '';
+    if (month && year) {
+      dateFilter = `AND EXTRACT(MONTH FROM created_at) = ${month} AND EXTRACT(YEAR FROM created_at) = ${year}`;
+    } else if (period) {
+      dateFilter = `AND created_at >= NOW() - INTERVAL '${period} days'`;
+    }
+    
+    // Get booking stats
+    const { data: bookings, error: bookingError } = await supabase
+      .from('bookings')
+      .select('status, total_price')
+      .eq('provider_id', providerId);
+    
+    if (bookingError) throw bookingError;
+    
+    const stats = {
+      totalBookings: bookings.length,
+      confirmedBookings: bookings.filter(b => b.status === 'confirmed').length,
+      pendingBookings: bookings.filter(b => b.status === 'pending').length,
+      cancelledBookings: bookings.filter(b => b.status === 'cancelled').length,
+      totalRevenue: bookings
+        .filter(b => b.status === 'completed')
+        .reduce((sum, b) => sum + (parseFloat(b.total_price) || 0), 0)
+    };
+    
+    res.json({ success: true, data: stats });
+    
+  } catch (error) {
+    console.error('Get stats error:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// Business hours management
+app.post('/api/providers/business-hours', async (req, res) => {
+  try {
+    const { providerId, businessHours } = req.body;
+    
+    // Delete existing business hours
+    await supabase
+      .from('business_hours')
+      .delete()
+      .eq('provider_id', providerId);
+    
+    // Insert new business hours
+    const hoursData = businessHours.map(hour => ({
+      provider_id: providerId,
+      day_of_week: hour.day,
+      is_available: hour.available,
+      open_time: hour.openTime,
+      close_time: hour.closeTime,
+      is_24_hours: hour.is24Hours
+    }));
+    
+    const { error } = await supabase
+      .from('business_hours')
+      .insert(hoursData);
+    
+    if (error) throw error;
+    
+    res.json({ success: true });
+    
+  } catch (error) {
+    console.error('Business hours error:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// ============================================================================
+// DATA EXPORT ENDPOINTS
+// ============================================================================
+
+// Download provider data (GDPR compliance)
+app.get('/api/providers/:providerId/download-data', async (req, res) => {
+  try {
+    const { providerId } = req.params;
+    const { format } = req.query;
+    
+    // Get all provider data
+    const { data: provider, error: providerError } = await supabase
+      .from('providers')
+      .select(`
+        *,
+        users(*),
+        services(*),
+        bookings(*),
+        provider_photos(*)
+      `)
+      .eq('id', providerId)
+      .single();
+    
+    if (providerError) throw providerError;
+    
+    // Format data based on requested format
+    let responseData;
+    let contentType;
+    let filename;
+    
+    switch (format) {
+      case 'json':
+        responseData = JSON.stringify(provider, null, 2);
+        contentType = 'application/json';
+        filename = `provider_data_${new Date().toISOString().split('T')[0]}.json`;
+        break;
+        
+      case 'csv':
+        // Convert to CSV format (simplified)
+        const csvData = convertToCSV(provider);
+        responseData = csvData;
+        contentType = 'text/csv';
+        filename = `provider_data_${new Date().toISOString().split('T')[0]}.csv`;
+        break;
+        
+      case 'pdf':
+        // Generate PDF (you'll need a PDF library like puppeteer)
+        responseData = await generatePDF(provider);
+        contentType = 'application/pdf';
+        filename = `provider_data_${new Date().toISOString().split('T')[0]}.pdf`;
+        break;
+        
+      default:
+        responseData = JSON.stringify(provider, null, 2);
+        contentType = 'application/json';
+        filename = `provider_data_${new Date().toISOString().split('T')[0]}.json`;
+    }
+    
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.setHeader('Content-Type', contentType);
+    res.send(responseData);
+    
+  } catch (error) {
+    console.error('Download data error:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// Export calendar
+app.post('/api/providers/export-calendar', async (req, res) => {
+  try {
+    const { providerId, format, dateRange, includeBookings, includeBlocked } = req.body;
+    
+    // Get calendar data based on filters
+    let startDate, endDate;
+    const today = new Date();
+    
+    switch (dateRange) {
+      case 'month':
+        startDate = new Date(today.getFullYear(), today.getMonth(), 1);
+        endDate = new Date(today.getFullYear(), today.getMonth() + 1, 0);
+        break;
+      case '3months':
+        startDate = today;
+        endDate = new Date(today.getFullYear(), today.getMonth() + 3, today.getDate());
+        break;
+      case 'year':
+        startDate = new Date(today.getFullYear(), 0, 1);
+        endDate = new Date(today.getFullYear(), 11, 31);
+        break;
+      default:
+        startDate = today;
+        endDate = new Date(today.getFullYear(), today.getMonth() + 1, today.getDate());
+    }
+    
+    const calendarData = [];
+    
+    if (includeBookings) {
+      const { data: bookings } = await supabase
+        .from('bookings')
+        .select('*, users(full_name), services(name)')
+        .eq('provider_id', providerId)
+        .gte('booking_date', startDate.toISOString().split('T')[0])
+        .lte('booking_date', endDate.toISOString().split('T')[0]);
+      
+      calendarData.push(...(bookings || []));
+    }
+    
+    if (includeBlocked) {
+      const { data: blocked } = await supabase
+        .from('blocked_time')
+        .select('*')
+        .eq('provider_id', providerId)
+        .gte('date', startDate.toISOString().split('T')[0])
+        .lte('date', endDate.toISOString().split('T')[0]);
+      
+      calendarData.push(...(blocked || []));
+    }
+    
+    // Generate export based on format
+    let exportData;
+    let contentType;
+    let filename;
+    
+    switch (format) {
+      case 'ics':
+        exportData = generateICSCalendar(calendarData);
+        contentType = 'text/calendar';
+        filename = `calendar_export_${new Date().toISOString().split('T')[0]}.ics`;
+        break;
+        
+      case 'csv':
+        exportData = convertCalendarToCSV(calendarData);
+        contentType = 'text/csv';
+        filename = `calendar_export_${new Date().toISOString().split('T')[0]}.csv`;
+        break;
+        
+      default:
+        exportData = JSON.stringify(calendarData, null, 2);
+        contentType = 'application/json';
+        filename = `calendar_export_${new Date().toISOString().split('T')[0]}.json`;
+    }
+    
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.setHeader('Content-Type', contentType);
+    res.send(exportData);
+    
+  } catch (error) {
+    console.error('Calendar export error:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// ============================================================================
+// HELPER FUNCTIONS
+// ============================================================================
+
+function convertToCSV(data) {
+  // Simple CSV conversion - you may want to use a proper CSV library
+  const csv = [];
+  csv.push('Field,Value');
+  
+  function addRow(key, value) {
+    csv.push(`"${key}","${String(value).replace(/"/g, '""')}"`);
+  }
+  
+  addRow('Business Name', data.business_name);
+  addRow('Email', data.users?.email);
+  addRow('Phone', data.users?.phone);
+  addRow('City', data.city);
+  addRow('State', data.state);
+  addRow('Country', data.country);
+  
+  return csv.join('\n');
+}
+
+function convertCalendarToCSV(events) {
+  const csv = [];
+  csv.push('Date,Time,Type,Title,Description');
+  
+  events.forEach(event => {
+    const date = event.booking_date || event.date;
+    const time = event.start_time;
+    const type = event.status ? 'Booking' : 'Blocked';
+    const title = event.services?.name || event.reason || 'Event';
+    const desc = event.users?.full_name || event.reason || '';
+    
+    csv.push(`"${date}","${time}","${type}","${title}","${desc}"`);
+  });
+  
+  return csv.join('\n');
+}
+
+function generateICSCalendar(events) {
+  // Basic ICS format - you may want to use a proper ICS library
+  let ics = 'BEGIN:VCALENDAR\nVERSION:2.0\nPRODID:Need a Service\n';
+  
+  events.forEach(event => {
+    const date = event.booking_date || event.date;
+    const startTime = event.start_time;
+    const title = event.services?.name || event.reason || 'Event';
+    
+    ics += 'BEGIN:VEVENT\n';
+    ics += `DTSTART:${date.replace(/-/g, '')}T${startTime.replace(/:/g, '')}00\n`;
+    ics += `SUMMARY:${title}\n`;
+    ics += `UID:${event.id}@need-a-service.com\n`;
+    ics += 'END:VEVENT\n';
+  });
+  
+  ics += 'END:VCALENDAR';
+  return ics;
+}
+
+async function generatePDF(data) {
+  // PDF generation - you'll need to install puppeteer or similar
+  // const puppeteer = require('puppeteer');
+  // Implementation depends on your PDF library choice
+  return JSON.stringify(data, null, 2); // Fallback to JSON
+}
+    
     // Validate required fields
     if (!fullName || !email || !phone || !businessName) {
       return res.status(400).json({
@@ -796,4 +1315,5 @@ app.listen(PORT, () => {
 });
 
 module.exports = app;
+
 
