@@ -16,20 +16,16 @@ const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
 
 // Middleware
 app.use(cors({
-  origin: function (origin, callback) {
-    if (!origin) return callback(null, true);
-    if (origin.includes('localhost') || origin.includes('127.0.0.1')) {
-      return callback(null, true);
-    }
-    if (origin.includes('.netlify.app')) {
-      return callback(null, true);
-    }
-    if (origin.includes('.onrender.com')) {
-      return callback(null, true);
-    }
-    return callback(new Error('Not allowed by CORS'));
-  },
-  credentials: true
+  origin: [
+    'http://localhost:3000',
+    'http://localhost:3001', 
+    'http://127.0.0.1:3000',
+    'https://zesty-entremet-6f685b.netlify.app',
+    'https://my-backend-kwgq.onrender.com'
+  ],
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization']
 }));
 app.use(express.json());
 app.use(express.static('public'));
@@ -800,3 +796,4 @@ app.listen(PORT, () => {
 });
 
 module.exports = app;
+
