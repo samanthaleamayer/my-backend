@@ -1045,6 +1045,80 @@ app.get('/api/providers/:id/complete', async (req, res) => {
   }
 });
 
+app.get('/api/providers/services/:serviceId', async (req, res) => {
+  try {
+    const { serviceId } = req.params;
+    
+    const { data, error } = await supabase
+      .from('services')
+      .select('*')
+      .eq('id', serviceId)
+      .single();
+    
+    if (error) throw error;
+    
+    res.json({ success: true, data });
+    
+  } catch (error) {
+    console.error('Get service error:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// Update service
+app.put('/api/providers/services/:serviceId', async (req, res) => {
+  try {
+    const { serviceId } = req.params;
+    const { name, category, duration_minutes, price, description } = req.body;
+    
+    const { data, error } = await supabase
+      .from('services')
+      .update({
+        name: name,
+        category: category,
+        duration_minutes: duration_minutes,
+        price: price,
+        description: description,
+        updated_at: new Date()
+      })
+      .eq('id', serviceId)
+      .select()
+      .single();
+    
+    if (error) throw error;
+    
+    res.json({ success: true, data });
+    
+  } catch (error) {
+    console.error('Update service error:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// Delete service
+app.delete('/api/providers/services/:serviceId', async (req, res) => {
+  try {
+    const { serviceId } = req.params;
+    
+    const { error } = await supabase
+      .from('services')
+      .delete()
+      .eq('id', serviceId);
+    
+    if (error) throw error;
+    
+    res.json({ success: true });
+    
+  } catch (error) {
+    console.error('Delete service error:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+app.listen(PORT, () => {
+  console.log(`Server running on port ${PORT}`);
+});
+
 // =================================
 // SERVICES ENDPOINTS (WITH DEBUG)
 // =================================
@@ -1665,6 +1739,7 @@ app.listen(PORT, () => {
 });
 
 module.exports = app;
+
 
 
 
