@@ -1265,6 +1265,298 @@ app.put('/api/bookings/:id/status', async (req, res) => {
   }
 });
 
+// Add this to your server.js to handle photo uploads
+// ADD TO server.js AFTER your existing endpoints
+
+const multer = require('multer');
+const path = require('path');
+const fs = require('fs');
+
+// Configure multer for file uploads
+const storage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    const uploadDir = 'uploads/providers/';
+    if (!fs.existsSync(uploadDir)) {
+      fs.mkdirSync(uploadDir, { recursive: true });
+    }
+    cb(null, uploadDir);
+  },
+  filename: (req, file, cb) => {
+    const uniqueName = `${req.body.providerId || 'unknown'}_${Date.now()}_${file.originalname}`;
+    cb(null, uniqueName);
+  }
+});
+
+const upload = multer({ 
+  storage: storage,
+  limits: { fileSize: 5 * 1024 * 1024 }, // 5MB limit
+  fileFilter: (req, file, cb) => {
+    const allowedTypes = ['image/jpeg', 'image/png', 'image/webp', 'image/jpg'];
+    if (allowedTypes.includes(file.mimetype)) {
+      cb(null, true);
+    } else {
+      cb(new Error('Invalid file type. Only JPEG, PNG, and WebP are allowed.'));
+    }
+  }
+});
+
+// Serve uploaded files statically
+app.use('/uploads', express.static('uploads'));
+
+// Photo upload endpoint
+app.post('/api/providers/upload-image', upload.single('image'), async (req, res) => {
+  try {
+    console.log('File upload request received');
+    console.log('Body:', req.body);
+    console.log('File:', req.file);
+    
+    const { providerId, imageType, setAsProfile } = req.body;
+    const file = req.file;
+    
+    if (!file) {
+      return res.status(400).json({ success: false, error: 'No image file provided' });
+    }
+    
+    if (!providerId) {
+      return res.status(400).json({ success: false, error: 'Provider ID is required' });
+    }
+    
+    // Create the image URL
+    const imageUrl = `/uploads/providers/${file.filename}`;
+    
+    // Check if provider_photos table exists, if not create it
+    const { data: tableCheck, error: tableError } = await supabase
+      .from('provider_photos')
+      .select('id')
+      .limit(1);
+    
+    if (tableError && tableError.code === '42P01') {
+      // Table doesn't exist, create it
+      const { error: createError } = await supabase.rpc('create_provider_photos_table');
+      if (createError) {
+        console.log('Table creation failed, proceeding without table storage');
+      }
+    }
+    
+    // Try to save to database, but don't fail if table doesn't exist
+    let photoId = null;
+    try {
+      const { data, error } = await supabase
+        .from('provider_photos')
+        .insert({
+          provider_id: providerId,
+          image_url: imageUrl,
+          image_type: imageType || 'other',
+          is_profile: setAsProfile === 'true',
+          file_name: file.filename,
+          file_size: file.size,
+          mime_type: file.mimetype
+        })
+        .select()
+        .single();
+      
+      if (!error && data) {
+        photoId = data.id;
+        
+        // If setting as profile, update user record
+        if (setAsProfile === 'true') {
+          // Unset other profile pictures
+          await supabase
+            .from('provider_photos')
+            .update({ is_profile: false })
+            .eq('provider_id', providerId)
+            .neq('id', data.id);
+          
+          // Update user profile_photo_url
+          await supabase
+            .from('users')
+            .update({ profile_photo_url: imageUrl })
+            .eq('id', providerId);
+        }
+      }
+    } catch (dbError) {
+      console.log('Database storage failed:', dbError.message);
+      // Continue anyway - file is uploaded, just not tracked in DB
+    }
+    
+    res.json({ 
+      success: true, 
+      imageUrl: imageUrl,
+      photoId: photoId,
+      message: 'Image uploaded successfully'
+    });
+    
+  } catch (error) {
+    console.error('Image upload error:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// Get provider photos
+app.get('/api/providers/:providerId/photos', async (req, res) => {
+  try {
+    const { providerId } = req.params;
+    
+    const { data, error } = await supabase
+      .from('provider_photos')
+      .select('*')
+      .eq('provider_id', providerId)
+      .order('created_at', { ascending: false });
+    
+    if (error && error.code !== '42P01') { // Ignore table not found error
+      throw error;
+    }
+    
+    res.json({ success: true, data: data || [] });
+    
+  } catch (error) {
+    console.error('Get photos error:', error);
+    res.json({ success: true, data: [] }); // Return empty array if table doesn't exist
+  }
+});
+
+// Set profile picture endpoint
+app.post('/api/providers/:providerId/set-profile-picture', async (req, res) => {
+  try {
+    const { providerId } = req.params;
+    const { photoId, imageUrl } = req.body;
+    
+    // Update user profile_photo_url directly
+    const { data, error } = await supabase
+      .from('users')
+      .update({ profile_photo_url: imageUrl })
+      .eq('id', providerId)
+      .select()
+      .single();
+    
+    if (error) throw error;
+    
+    // Try to update provider_photos table if it exists
+    try {
+      if (photoId) {
+        await supabase
+          .from('provider_photos')
+          .update({ is_profile: false })
+          .eq('provider_id', providerId);
+        
+        await supabase
+          .from('provider_photos')
+          .update({ is_profile: true })
+          .eq('id', photoId);
+      }
+    } catch (dbError) {
+      console.log('Photo table update failed:', dbError.message);
+      // Continue anyway
+    }
+    
+    res.json({ success: true, data });
+    
+  } catch (error) {
+    console.error('Set profile picture error:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// ================================================
+// UPDATE YOUR DASHBOARD PHOTO FUNCTIONS 
+// Replace these functions in provider-dashboard.html
+// ================================================
+
+async function uploadCroppedImage(fileName, imageSrc) {
+  const imageType = document.getElementById('imageType').value;
+  const setAsProfile = document.getElementById('setAsProfile').checked;
+  
+  try {
+    // Show loading state
+    const uploadBtn = document.querySelector('.btn-primary');
+    const originalText = uploadBtn.textContent;
+    uploadBtn.textContent = 'Uploading...';
+    uploadBtn.disabled = true;
+    
+    // Convert base64 to blob
+    const response = await fetch(imageSrc);
+    const blob = await response.blob();
+    
+    // Create FormData for upload
+    const formData = new FormData();
+    formData.append('image', blob, fileName);
+    formData.append('providerId', providerId);
+    formData.append('imageType', imageType);
+    formData.append('setAsProfile', setAsProfile);
+    
+    console.log('Uploading image to:', `${API_BASE}/api/providers/upload-image`);
+    
+    // Upload to backend
+    const uploadResponse = await fetch(`${API_BASE}/api/providers/upload-image`, {
+      method: 'POST',
+      body: formData
+    });
+    
+    console.log('Upload response status:', uploadResponse.status);
+    
+    if (!uploadResponse.ok) {
+      throw new Error(`HTTP ${uploadResponse.status}: ${uploadResponse.statusText}`);
+    }
+    
+    const result = await uploadResponse.json();
+    console.log('Upload result:', result);
+    
+    if (result.success) {
+      showNotification('Image uploaded successfully!', 'success');
+      
+      // If set as profile, update the UI immediately
+      if (setAsProfile) {
+        updateProviderProfilePicture(result.imageUrl);
+      }
+      
+      // Refresh photo grid
+      loadProviderPhotos();
+      
+      // Close modal
+      document.querySelector('.modal').remove();
+    } else {
+      throw new Error(result.error || 'Upload failed');
+    }
+    
+  } catch (error) {
+    console.error('Upload error:', error);
+    showNotification('Failed to upload image: ' + error.message, 'error');
+  } finally {
+    // Reset button
+    const uploadBtn = document.querySelector('.btn-primary');
+    if (uploadBtn) {
+      uploadBtn.textContent = originalText;
+      uploadBtn.disabled = false;
+    }
+  }
+}
+
+// Enhanced photo management
+function updateProviderProfilePicture(imageUrl) {
+  // Ensure URL is complete
+  if (imageUrl && !imageUrl.startsWith('http')) {
+    imageUrl = `${API_BASE}${imageUrl}`;
+  }
+  
+  console.log('Updating profile picture to:', imageUrl);
+  
+  // Update top bar avatar
+  const avatar = document.getElementById('userAvatar');
+  if (avatar && imageUrl) {
+    avatar.innerHTML = `<img src="${imageUrl}" alt="Profile" style="width: 36px; height: 36px; border-radius: 50%; object-fit: cover;" onerror="this.style.display='none'; this.parentNode.textContent='${(currentProvider?.users?.full_name || 'P').charAt(0).toUpperCase()}'">`;
+  }
+  
+  // Update currentProvider data
+  if (currentProvider && currentProvider.users) {
+    currentProvider.users.profile_photo_url = imageUrl;
+  }
+  
+  // Refresh profile section if currently active
+  if (document.getElementById('profile-section').classList.contains('active')) {
+    loadProfileSection();
+  }
+}
+
 // =================================
 // UTILITY FUNCTIONS
 // =================================
@@ -1315,5 +1607,6 @@ app.listen(PORT, () => {
 });
 
 module.exports = app;
+
 
 
