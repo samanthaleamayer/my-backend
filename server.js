@@ -1,6 +1,7 @@
 const express = require('express');
 const cors = require('cors');
 const { createClient } = require('@supabase/supabase-js');
+const bcrypt = require('bcrypt');
 require('dotenv').config();
 
 const app = express();
@@ -29,6 +30,68 @@ app.use(cors({
 }));
 app.use(express.json());
 app.use(express.static('public'));
+
+app.post('/api/auth/change-password', async (req, res) => {
+  try {
+    const { providerId, currentPassword, newPassword } = req.body;
+    
+    // Get user's current password hash
+    const { data: user, error } = await supabase
+      .from('users')
+      .select('password_hash')
+      .eq('id', providerId)
+      .single();
+    
+    if (error) throw error;
+    
+    // Verify current password
+    const bcrypt = require('bcrypt');
+    const isValid = await bcrypt.compare(currentPassword, user.password_hash);
+    
+    if (!isValid) {
+      return res.status(400).json({ success: false, error: 'Current password is incorrect' });
+    }
+    
+    // Hash new password
+    const newPasswordHash = await bcrypt.hash(newPassword, 10);
+    
+    // Update password
+    const { error: updateError } = await supabase
+      .from('users')
+      .update({ password_hash: newPasswordHash })
+      .eq('id', providerId);
+    
+    if (updateError) throw updateError;
+    
+    res.json({ success: true });
+    
+  } catch (error) {
+    console.error('Change password error:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// Notifications endpoint
+app.get('/api/providers/:providerId/notifications', async (req, res) => {
+  try {
+    const { providerId } = req.params;
+    
+    const { data, error } = await supabase
+      .from('notifications')
+      .select('*')
+      .eq('provider_id', providerId)
+      .order('created_at', { ascending: false })
+      .limit(50);
+    
+    if (error) throw error;
+    
+    res.json({ success: true, data: data || [] });
+    
+  } catch (error) {
+    console.error('Notifications error:', error);
+    res.json({ success: true, data: [] }); // Return empty array on error
+  }
+});
 
 // Health check endpoint
 app.get('/health', (req, res) => {
@@ -1457,11 +1520,6 @@ app.post('/api/providers/:providerId/set-profile-picture', async (req, res) => {
   }
 });
 
-// ================================================
-// UPDATE YOUR DASHBOARD PHOTO FUNCTIONS 
-// Replace these functions in provider-dashboard.html
-// ================================================
-
 async function uploadCroppedImage(fileName, imageSrc) {
   const imageType = document.getElementById('imageType').value;
   const setAsProfile = document.getElementById('setAsProfile').checked;
@@ -1607,6 +1665,7 @@ app.listen(PORT, () => {
 });
 
 module.exports = app;
+
 
 
 
