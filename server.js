@@ -690,11 +690,8 @@ app.get('/api/providers/:id/calendar', async (req, res) => {
     
     // Get bookings with service details
     const { data: bookings, error: bookingsError } = await supabase
-      .from('bookings')
-      .select(`
-        *,
-        services:service_id (name, duration, price)
-      `)
+  .from('bookings')
+  .select('*')
       .eq('provider_id', providerId)
       .gte('booking_date', startDate)
       .lte('booking_date', endDate)
@@ -788,3 +785,4 @@ app.listen(PORT, () => {
 });
 
 module.exports = app;
+
