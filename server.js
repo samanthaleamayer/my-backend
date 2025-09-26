@@ -10,7 +10,7 @@ require('dotenv').config();
 const app = express();
 const PORT = process.env.PORT || 3001;
 
-// Initialize supabase
+// Initialize Supabase
 const supabaseUrl = process.env.SUPABASE_URL || 'https://yllawvwoeuvwlvuiqyug.supabase.co';
 const supabaseKey = process.env.SUPABASE_ANON_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InlsbGF3dndvZXV2d2x2dWlxeXVnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTcwOTcxMTgsImV4cCI6MjA3MjY3MzExOH0.lJ5HLC-NcyLCEMGkkvvh-RUmL302a9kkJwpcxLff-Ns';
 const supabase = createClient(supabaseUrl, supabaseKey);
@@ -35,7 +35,7 @@ const storage = multer.diskStorage({
 
 const upload = multer({ 
   storage: storage,
-  limits: { fileSize: 5 * 1024 * 1024 }, // 5MB limit
+  limits: { fileSize: 5 * 1024 * 1024 },
   fileFilter: (req, file, cb) => {
     const allowedTypes = ['image/jpeg', 'image/png', 'image/webp', 'image/jpg'];
     if (allowedTypes.includes(file.mimetype)) {
@@ -61,13 +61,16 @@ app.use(cors({
 }));
 app.use(express.json());
 app.use(express.static('public'));
-app.use('/uploads', express.static('uploads')); // Serve uploaded files
+app.use('/uploads', express.static('uploads'));
+
+// =================================
+// AUTHENTICATION ENDPOINTS
+// =================================
 
 app.post('/api/auth/change-password', async (req, res) => {
   try {
     const { providerId, currentPassword, newPassword } = req.body;
     
-    // Get user ID from provider ID
     const { data: provider, error: providerError } = await supabase
       .from('providers')
       .select('user_id')
@@ -115,7 +118,6 @@ app.post('/api/login', async (req, res) => {
       return res.status(400).json({ success: false, error: 'Email is required' });
     }
 
-    // Find user by email and role
     const { data: user, error: userError } = await supabase
       .from('users')
       .select('id, email, full_name, role')
@@ -130,7 +132,6 @@ app.post('/api/login', async (req, res) => {
       });
     }
 
-    // Get provider profile
     const { data: provider, error: providerError } = await supabase
       .from('providers')
       .select('*')
@@ -160,11 +161,45 @@ app.post('/api/login', async (req, res) => {
   }
 });
 
+// =================================
+// UTILITY ENDPOINTS
+// =================================
+
+app.get('/health', (req, res) => {
+  res.json({ 
+    status: 'Backend running with updated database schema!', 
+    timestamp: new Date().toISOString(),
+    version: 'v2.0-clean-syntax'
+  });
+});
+
+app.get('/api/test-db', async (req, res) => {
+  try {
+    const { data: users } = await supabase.from('users').select('count');
+    const { data: providers } = await supabase.from('providers').select('count');
+    const { data: services } = await supabase.from('services').select('count');
+    
+    res.json({ 
+      success: true, 
+      message: 'All database tables connected successfully',
+      tables: {
+        users: 'connected',
+        providers: 'connected', 
+        services: 'connected'
+      }
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// =================================
+// PROVIDER REGISTRATION
+// =================================
+
 app.post('/api/providers/register', async (req, res) => {
   try {
     console.log('=== PROVIDER REGISTRATION STARTED ===');
-    console.log('Request body keys:', Object.keys(req.body));
-    console.log('Services data:', req.body.services);
     
     const {
       fullName, email, phone, dateOfBirth, profilePhoto, bio,
@@ -174,7 +209,6 @@ app.post('/api/providers/register', async (req, res) => {
       insurance, services, bankCountry, agreeToStripeTerms
     } = req.body;
 
-    // Validate required fields
     if (!fullName || !email || !phone || !businessName) {
       return res.status(400).json({
         success: false,
@@ -182,7 +216,6 @@ app.post('/api/providers/register', async (req, res) => {
       });
     }
 
-    // Check if email already exists
     const { data: existingUser, error: checkError } = await supabase
       .from('users')
       .select('email')
@@ -196,7 +229,6 @@ app.post('/api/providers/register', async (req, res) => {
       });
     }
 
-    // Step 1: Create user record
     const userData = {
       email,
       full_name: fullName,
@@ -220,9 +252,8 @@ app.post('/api/providers/register', async (req, res) => {
       throw userError;
     }
 
-    console.log('✅ User created with ID:', createdUser.id);
+    console.log('User created with ID:', createdUser.id);
 
-    // Step 2: Create Stripe account if requested
     let stripeAccountId = null;
     let stripeOnboardingUrl = null;
 
@@ -244,16 +275,15 @@ app.post('/api/providers/register', async (req, res) => {
           account: account.id,
           refresh_url: 'https://zesty-entremet-6f685b.netlify.app/provider-dashboard.html',
           return_url: 'https://zesty-entremet-6f685b.netlify.app/provider-dashboard.html',
-          type: 'account_onboarding',
+          type: 'account_onboarding'
         });
         stripeOnboardingUrl = accountLink.url;
-        console.log('✅ Stripe account created:', stripeAccountId);
+        console.log('Stripe account created:', stripeAccountId);
       } catch (stripeError) {
         console.error('Stripe error (non-fatal):', stripeError);
       }
     }
 
-    // Step 3: Create provider profile
     const providerData = {
       user_id: createdUser.id,
       business_name: businessName,
@@ -284,21 +314,17 @@ app.post('/api/providers/register', async (req, res) => {
 
     if (providerError) {
       console.error('Provider creation error:', providerError);
-      // Cleanup user if provider creation fails
       await supabase.from('users').delete().eq('id', createdUser.id);
       throw providerError;
     }
 
-    console.log('✅ Provider created with ID:', createdProvider.id);
+    console.log('Provider created with ID:', createdProvider.id);
 
-    // Step 4: Add services
     let servicesInserted = 0;
     if (services && Array.isArray(services) && services.length > 0) {
       console.log(`Processing ${services.length} services...`);
       
-      const servicesData = services.map((service, index) => {
-        console.log(`Service ${index}:`, service);
-        
+      const servicesData = services.map((service) => {
         return {
           provider_id: createdProvider.id,
           name: service.name,
@@ -319,10 +345,9 @@ app.post('/api/providers/register', async (req, res) => {
 
       if (servicesError) {
         console.error('Services insertion error:', servicesError);
-        console.error('Failed services data:', servicesData);
       } else {
         servicesInserted = insertedServices.length;
-        console.log(`✅ ${servicesInserted} services created successfully`);
+        console.log(`Services created: ${servicesInserted}`);
       }
     }
 
@@ -348,7 +373,11 @@ app.post('/api/providers/register', async (req, res) => {
       error: 'Registration failed: ' + error.message
     });
   }
-}
+});
+
+// =================================
+// PROVIDER PROFILE ENDPOINTS
+// =================================
 
 app.get('/api/providers/:id/complete', async (req, res) => {
   try {
@@ -365,7 +394,6 @@ app.get('/api/providers/:id/complete', async (req, res) => {
       return res.status(404).json({ success: false, error: 'Provider not found' });
     }
 
-    // Get user data
     const { data: user, error: userError } = await supabase
       .from('users')
       .select('*')
@@ -376,7 +404,6 @@ app.get('/api/providers/:id/complete', async (req, res) => {
       console.error('User fetch error:', userError);
     }
 
-    // Get services
     const { data: services, error: servicesError } = await supabase
       .from('services')
       .select('*')
@@ -393,7 +420,7 @@ app.get('/api/providers/:id/complete', async (req, res) => {
       services: services || []
     };
 
-    console.log(`✅ Provider data fetched - ${combinedData.services.length} services found`);
+    console.log(`Provider data fetched - ${combinedData.services.length} services found`);
 
     res.json({ success: true, data: combinedData });
     
@@ -402,6 +429,10 @@ app.get('/api/providers/:id/complete', async (req, res) => {
     res.status(500).json({ success: false, error: error.message });
   }
 });
+
+// =================================
+// SERVICES ENDPOINTS
+// =================================
 
 app.get('/api/providers/:providerId/services', async (req, res) => {
   try {
@@ -505,6 +536,10 @@ app.delete('/api/providers/services/:serviceId', async (req, res) => {
   }
 });
 
+// =================================
+// PHOTO UPLOAD ENDPOINTS
+// =================================
+
 app.post('/api/providers/upload-image', upload.single('image'), async (req, res) => {
   try {
     console.log('Image upload request received');
@@ -522,9 +557,7 @@ app.post('/api/providers/upload-image', upload.single('image'), async (req, res)
     
     const imageUrl = `/uploads/providers/${file.filename}`;
     
-    // Update user's profile photo if set as profile
     if (setAsProfile === 'true') {
-      // Get user_id from provider
       const { data: provider } = await supabase
         .from('providers')
         .select('user_id')
@@ -539,7 +572,6 @@ app.post('/api/providers/upload-image', upload.single('image'), async (req, res)
       }
     }
     
-    // Store in provider_photos table
     let photoId = null;
     try {
       const { data, error } = await supabase
@@ -573,6 +605,102 @@ app.post('/api/providers/upload-image', upload.single('image'), async (req, res)
   }
 });
 
+// =================================
+// CALENDAR ENDPOINTS
+// =================================
+
+app.get('/api/providers/:id/calendar', async (req, res) => {
+  try {
+    const { month, year } = req.query;
+    const providerId = req.params.id;
+    
+    const startDate = `${year}-${month.padStart(2, '0')}-01`;
+    const endDate = new Date(year, month, 0).toISOString().split('T')[0];
+    
+    const { data: businessHours, error: hoursError } = await supabase
+      .from('business_hours')
+      .select('*')
+      .eq('provider_id', providerId)
+      .order('day_of_week');
+    
+    const { data: bookings, error: bookingsError } = await supabase
+      .from('bookings')
+      .select('*')
+      .eq('provider_id', providerId)
+      .gte('booking_date', startDate)
+      .lte('booking_date', endDate)
+      .order('booking_date')
+      .order('booking_time');
+    
+    const { data: blockedSlots, error: slotsError } = await supabase
+      .from('calendar_slots')
+      .select('*')
+      .eq('provider_id', providerId)
+      .gte('date', startDate)
+      .lte('date', endDate)
+      .in('status', ['blocked', 'break']);
+    
+    if (hoursError || bookingsError || slotsError) {
+      throw hoursError || bookingsError || slotsError;
+    }
+    
+    res.json({
+      success: true,
+      data: {
+        businessHours: businessHours || [],
+        bookings: bookings || [],
+        blockedSlots: blockedSlots || [],
+        month: parseInt(month),
+        year: parseInt(year)
+      }
+    });
+    
+  } catch (error) {
+    console.error('Calendar fetch error:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+app.get('/api/providers/:providerId/stats', async (req, res) => {
+  try {
+    const { providerId } = req.params;
+    const { period = '30' } = req.query;
+    
+    const startDate = new Date();
+    startDate.setDate(startDate.getDate() - parseInt(period));
+    const startDateStr = startDate.toISOString().split('T')[0];
+    
+    const { data: bookings, error: bookingsError } = await supabase
+      .from('bookings')
+      .select('status, total_amount, booking_date')
+      .eq('provider_id', providerId)
+      .gte('booking_date', startDateStr);
+    
+    if (bookingsError) throw bookingsError;
+    
+    const stats = {
+      totalBookings: bookings.length,
+      confirmedBookings: bookings.filter(b => b.status === 'confirmed').length,
+      pendingBookings: bookings.filter(b => b.status === 'pending').length,
+      cancelledBookings: bookings.filter(b => b.status === 'cancelled').length,
+      completedBookings: bookings.filter(b => b.status === 'completed').length,
+      totalRevenue: bookings
+        .filter(b => b.status === 'completed')
+        .reduce((sum, b) => sum + (parseFloat(b.total_amount) || 0), 0)
+    };
+    
+    res.json({ success: true, data: stats });
+    
+  } catch (error) {
+    console.error('Stats error:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// =================================
+// BOOKING ENDPOINTS
+// =================================
+
 app.post('/api/bookings', async (req, res) => {
   try {
     const {
@@ -580,7 +708,7 @@ app.post('/api/bookings', async (req, res) => {
       bookingDate, bookingTime, serviceDuration, servicePrice, notes
     } = req.body;
     
-    const platformFee = servicePrice * 0.1; // 10% platform fee
+    const platformFee = servicePrice * 0.1;
     const totalAmount = servicePrice + platformFee;
     const confirmationNumber = generateConfirmationNumber();
     
@@ -673,89 +801,44 @@ app.put('/api/bookings/:bookingId/status', async (req, res) => {
   }
 });
 
-app.get('/api/providers/:id/calendar', async (req, res) => {
+// =================================
+// NOTIFICATIONS ENDPOINT
+// =================================
+
+app.get('/api/providers/:providerId/notifications', async (req, res) => {
   try {
-    const { month, year } = req.query;
-    const providerId = req.params.id;
+    const { providerId } = req.params;
     
-    const startDate = `${year}-${month.padStart(2, '0')}-01`;
-    const endDate = new Date(year, month, 0).toISOString().split('T')[0];
+    const { data: provider } = await supabase
+      .from('providers')
+      .select('user_id')
+      .eq('id', providerId)
+      .single();
     
-    // Get business hours
-    const { data: businessHours, error: hoursError } = await supabase
-      .from('business_hours')
-      .select('*')
-      .eq('provider_id', providerId)
-      .order('day_of_week');
-    
-    // Get bookings with service details
-    const { data: bookings, error: bookingsError } = await supabase
-  .from('bookings')
-  .select('*')
-      .eq('provider_id', providerId)
-      .gte('booking_date', startDate)
-      .lte('booking_date', endDate)
-      .order('booking_date')
-      .order('booking_time');
-    
-    // Get blocked slots
-    const { data: blockedSlots, error: slotsError } = await supabase
-      .from('calendar_slots')
-      .select('*')
-      .eq('provider_id', providerId)
-      .gte('date', startDate)
-      .lte('date', endDate)
-      .in('status', ['blocked', 'break']);
-    
-    if (hoursError || bookingsError || slotsError) {
-      throw hoursError || bookingsError || slotsError;
+    if (!provider) {
+      return res.json({ success: true, data: [] });
     }
     
-    res.json({
-      success: true,
-      data: {
-        businessHours: businessHours || [],
-        bookings: bookings || [],
-        blockedSlots: blockedSlots || [],
-        month: parseInt(month),
-        year: parseInt(year)
-      }
-    });
+    const { data, error } = await supabase
+      .from('notifications')
+      .select('*')
+      .eq('user_id', provider.user_id)
+      .order('created_at', { ascending: false })
+      .limit(50);
+    
+    if (error) throw error;
+    
+    res.json({ success: true, data: data || [] });
     
   } catch (error) {
-    console.error('Calendar fetch error:', error);
-    res.status(500).json({ success: false, error: error.message });
+    console.error('Notifications error:', error);
+    res.json({ success: true, data: [] });
   }
 });
 
-app.get('/health', (req, res) => {
-  res.json({ 
-    status: 'Backend running with updated database schema!', 
-    timestamp: new Date().toISOString(),
-    version: 'v2.0-fixed-database'
-  });
-});
-
-app.get('/api/test-db', async (req, res) => {
-  try {
-    // Test all new tables
-    const { data: users } = await supabase.from('users').select('count');
-    const { data: providers } = await supabase.from('providers').select('count');
-    const { data: services } = await supabase.from('services').select('count');
-    
-    res.json({ 
-      success: true, 
-      message: 'All database tables connected successfully',
-      tables: {
-        users: 'connected',
-        providers: 'connected', 
-        services: 'connected'
-      }
-    });
-  } catch (error) {
-    res.status(500).json({ success: false, error: error.message });
-  }
-});
+// =================================
+// UTILITY FUNCTIONS
+// =================================
 
 function generateConfirmationNumber() {
   const date = new Date();
@@ -766,6 +849,10 @@ function generateConfirmationNumber() {
   return `BK${year}${month}${day}${random}`;
 }
 
+// =================================
+// ERROR HANDLING
+// =================================
+
 app.use((error, req, res, next) => {
   console.error('Server error:', error);
   res.status(500).json({ success: false, error: 'Internal server error' });
@@ -775,14 +862,17 @@ app.use((req, res) => {
   res.status(404).json({ success: false, error: 'Endpoint not found' });
 });
 
+// =================================
+// START SERVER
+// =================================
+
 app.listen(PORT, () => {
   console.log(`🚀 Backend server running on http://localhost:${PORT}`);
   console.log(`📊 Health check: http://localhost:${PORT}/health`);
   console.log(`🗄️ Database test: http://localhost:${PORT}/api/test-db`);
+  console.log(`✅ CLEAN SYNTAX VERSION - No more parsing errors!`);
   console.log(`✅ FIXED: Registration system using new database schema!`);
-  console.log(`✅ FIXED: Services and profile pictures will now save correctly!`);
-  console.log(`✅ NEW: Added booking creation and management endpoints!`);
+  console.log(`✅ NEW: Complete booking and calendar system!`);
 });
 
 module.exports = app;
-
