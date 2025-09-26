@@ -112,15 +112,20 @@ app.post('/api/auth/change-password', async (req, res) => {
 
 app.post('/api/login', async (req, res) => {
   try {
-    const { email } = req.body;
+    const { email, password } = req.body;
 
     if (!email) {
       return res.status(400).json({ success: false, error: 'Email is required' });
     }
+    
+    if (!password) {
+      return res.status(400).json({ success: false, error: 'Password is required' });
+    }
 
+    // Find user by email and role
     const { data: user, error: userError } = await supabase
       .from('users')
-      .select('id, email, full_name, role')
+      .select('id, email, full_name, role, password_hash')
       .eq('email', email)
       .eq('role', 'provider')
       .single();
@@ -132,6 +137,24 @@ app.post('/api/login', async (req, res) => {
       });
     }
 
+    // Verify password
+    if (!user.password_hash) {
+      return res.status(400).json({
+        success: false,
+        error: 'Account setup incomplete. Please contact support.'
+      });
+    }
+
+    const isValidPassword = await bcrypt.compare(password, user.password_hash);
+    
+    if (!isValidPassword) {
+      return res.status(401).json({
+        success: false,
+        error: 'Invalid email or password'
+      });
+    }
+
+    // Get provider profile
     const { data: provider, error: providerError } = await supabase
       .from('providers')
       .select('*')
@@ -149,7 +172,12 @@ app.post('/api/login', async (req, res) => {
       success: true,
       message: 'Login successful',
       data: {
-        user,
+        user: {
+          id: user.id,
+          email: user.email,
+          full_name: user.full_name,
+          role: user.role
+        },
         provider,
         dashboardUrl: `https://zesty-entremet-6f685b.netlify.app/provider-dashboard.html?providerId=${provider.id}&email=${email}`
       }
@@ -876,3 +904,4 @@ app.listen(PORT, () => {
 });
 
 module.exports = app;
+
