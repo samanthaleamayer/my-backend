@@ -46,19 +46,20 @@ const upload = multer({
   }
 });
 
-// Middleware
+// TEMPORARY DEBUG: Add logging before CORS
+app.use((req, res, next) => {
+  console.log(`${req.method} ${req.url} - Origin: ${req.headers.origin}`);
+  next();
+});
+
+// TEMPORARY: Replace your existing CORS with this
 app.use(cors({
-  origin: [
-    'http://localhost:3000',
-    'http://localhost:3001', 
-    'http://127.0.0.1:3000',
-    'https://zesty-entremet-6f685b.netlify.app',
-    'https://my-backend-kwgq.onrender.com'
-  ],
+  origin: '*', // Allow all origins temporarily
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization']
 }));
+
 app.use(express.json());
 app.use(express.static('public'));
 app.use('/uploads', express.static('uploads'));
@@ -904,4 +905,5 @@ app.listen(PORT, () => {
 });
 
 module.exports = app;
+
 
