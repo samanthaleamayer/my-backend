@@ -112,17 +112,27 @@ app.post('/api/auth/change-password', async (req, res) => {
 });
 
 app.post('/api/login', async (req, res) => {
+  console.log('=== LOGIN ENDPOINT HIT ===');
+  console.log('Request body:', req.body);
+  console.log('Request headers:', req.headers);
+  
   try {
     const { email, password } = req.body;
+    console.log('Extracted email:', email);
+    console.log('Extracted password:', password ? 'PROVIDED' : 'MISSING');
 
     if (!email) {
+      console.log('ERROR: Email missing');
       return res.status(400).json({ success: false, error: 'Email is required' });
     }
     
     if (!password) {
+      console.log('ERROR: Password missing');
       return res.status(400).json({ success: false, error: 'Password is required' });
     }
 
+    console.log('Searching for user with email:', email);
+    
     // Find user by email and role
     const { data: user, error: userError } = await supabase
       .from('users')
@@ -131,30 +141,43 @@ app.post('/api/login', async (req, res) => {
       .eq('role', 'provider')
       .single();
 
+    console.log('Supabase user query result:', { user, userError });
+
     if (userError || !user) {
+      console.log('User not found or error:', userError);
       return res.status(404).json({ 
         success: false, 
         error: 'No provider account found with that email address' 
       });
     }
 
-    // Verify password
+    console.log('User found, checking password...');
+    
+    // The issue might be here - let's check password_hash
+    console.log('User has password_hash:', !!user.password_hash);
+
     if (!user.password_hash) {
+      console.log('ERROR: No password hash found');
       return res.status(400).json({
         success: false,
         error: 'Account setup incomplete. Please contact support.'
       });
     }
 
+    const bcrypt = require('bcrypt');
     const isValidPassword = await bcrypt.compare(password, user.password_hash);
+    console.log('Password validation result:', isValidPassword);
     
     if (!isValidPassword) {
+      console.log('ERROR: Invalid password');
       return res.status(401).json({
         success: false,
         error: 'Invalid email or password'
       });
     }
 
+    console.log('Password valid, getting provider profile...');
+    
     // Get provider profile
     const { data: provider, error: providerError } = await supabase
       .from('providers')
@@ -162,12 +185,17 @@ app.post('/api/login', async (req, res) => {
       .eq('user_id', user.id)
       .single();
 
+    console.log('Provider query result:', { provider, providerError });
+
     if (providerError || !provider) {
+      console.log('Provider not found:', providerError);
       return res.status(404).json({ 
         success: false, 
         error: 'Provider profile not found' 
       });
     }
+
+    console.log('Login successful, sending response...');
 
     res.json({
       success: true,
@@ -184,8 +212,11 @@ app.post('/api/login', async (req, res) => {
       }
     });
 
+    console.log('Response sent successfully');
+
   } catch (error) {
-    console.error('Login error:', error);
+    console.error('=== LOGIN ERROR ===');
+    console.error('Error details:', error);
     res.status(500).json({ success: false, error: 'Login failed: ' + error.message });
   }
 });
@@ -905,5 +936,6 @@ app.listen(PORT, () => {
 });
 
 module.exports = app;
+
 
 
