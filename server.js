@@ -5,6 +5,7 @@ const bcrypt = require('bcrypt');
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
+const jwt = require('jsonwebtoken');
 require('dotenv').config();
 
 const app = express();
@@ -958,6 +959,7 @@ app.listen(PORT, () => {
 });
 
 module.exports = app;
+
 
 
 
