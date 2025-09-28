@@ -216,7 +216,7 @@ app.post('/api/auth/change-password', async (req, res) => {
 // UTILITY ENDPOINTS
 // =================================
 
-app.get('/health', (req, res) => {
+app.get('/api/health', (req, res) => {
   res.json({ 
     status: 'Backend running with FIXED authentication!', 
     timestamp: new Date().toISOString(),
@@ -942,3 +942,4 @@ app.listen(PORT, () => {
 });
 
 module.exports = app;
+
