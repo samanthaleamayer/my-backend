@@ -172,20 +172,33 @@ app.post('/api/login', async (req, res) => {
 
     console.log('Login successful!');
 
-    return res.json({
-      success: true,
-      message: 'Login successful',
-      data: {
-        user: {
-          id: user.id,
-          email: user.email,
-          full_name: user.full_name,
-          role: user.role
-        },
-        provider,
-        dashboardUrl: `https://zesty-entremet-6f685b.netlify.app/provider-dashboard.html?providerId=${provider.id}&email=${email}`
-      }
-    });
+   // Generate JWT token
+const token = jwt.sign(
+  { 
+    userId: user.id, 
+    email: user.email, 
+    providerId: provider.id,
+    role: user.role 
+  },
+  process.env.JWT_SECRET || 'your-secret-key',
+  { expiresIn: '24h' }
+);
+
+return res.json({
+  success: true,
+  message: 'Login successful',
+  data: {
+    user: {
+      id: user.id,
+      email: user.email,
+      full_name: user.full_name,
+      role: user.role
+    },
+    provider,
+    token,
+    dashboardUrl: `https://zesty-entremet-6f685b.netlify.app/provider-dashboard.html?providerId=${provider.id}&email=${email}`
+  }
+});
 
   } catch (error) {
     console.error('Login error:', error);
@@ -980,6 +993,7 @@ app.listen(PORT, () => {
 });
 
 module.exports = app;
+
 
 
 
