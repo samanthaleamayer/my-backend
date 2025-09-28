@@ -389,49 +389,56 @@ app.post('/api/providers/register', async (req, res) => {
     console.log('Provider created with ID:', createdProvider.id);
 
     let servicesInserted = 0;
-    if (services && Array.isArray(services) && services.length > 0) {
-      console.log(`Processing ${services.length} services...`);
-      
-      const servicesData = services.map((service) => {
-        return {
-          provider_id: createdProvider.id,
-          name: service.name,
-          category: service.category,
-          subcategory: service.subCategory || service.subcategory,
-          duration: parseInt(service.duration) || 60,
-          duration_minutes: parseInt(service.duration) || 60,
-          price: parseFloat(service.price) || 0,
-          description: service.description || '',
-          is_active: true
-        };
-      });
+let servicesErrors = [];
 
-      const { data: insertedServices, error: servicesError } = await supabase
-        .from('services')
-        .insert(servicesData)
-        .select();
+if (services && Array.isArray(services) && services.length > 0) {
+  console.log(`Processing ${services.length} services...`);
+  
+  const servicesData = services.map((service) => {
+    return {
+      provider_id: createdProvider.id,
+      name: service.name,
+      category: service.category,
+      subcategory: service.subCategory || service.subcategory,
+      duration: parseInt(service.duration) || 60,
+      duration_minutes: parseInt(service.duration) || 60,
+      price: parseFloat(service.price) || 0,
+      description: service.description || '',
+      is_active: true
+    };
+  });
 
-      if (servicesError) {
-        console.error('Services insertion error:', servicesError);
-      } else {
-        servicesInserted = insertedServices.length;
-        console.log(`Services created: ${servicesInserted}`);
-      }
-    }
+  const { data: insertedServices, error: servicesError } = await supabase
+    .from('services')
+    .insert(servicesData)
+    .select();
 
+  if (servicesError) {
+    console.error('Services insertion error:', servicesError);
+    servicesErrors.push('Failed to save some services: ' + servicesError.message);
+    servicesInserted = 0;
+  } else {
+    servicesInserted = insertedServices ? insertedServices.length : 0;
+    console.log(`Services created: ${servicesInserted}`);
+  }
+}
     console.log('=== REGISTRATION COMPLETED SUCCESSFULLY ===');
 
-    res.json({
-      success: true,
-      message: 'Provider registration completed successfully',
-      data: {
-        user: createdUser,
-        provider: createdProvider,
-        servicesCreated: servicesInserted,
-        stripeOnboardingUrl,
-        dashboardUrl: `https://zesty-entremet-6f685b.netlify.app/provider-dashboard.html?providerId=${createdProvider.id}&email=${email}`
-      }
-    });
+   res.json({
+  success: true,
+  message: servicesErrors.length > 0 
+    ? 'Registration completed with some issues' 
+    : 'Provider registration completed successfully',
+  data: {
+    user: createdUser,
+    provider: createdProvider,
+    servicesCreated: servicesInserted,
+    servicesErrors: servicesErrors,
+    stripeOnboardingUrl,
+    dashboardUrl: `https://zesty-entremet-6f685b.netlify.app/provider-dashboard.html?providerId=${createdProvider.id}&email=${email}`
+  },
+  warnings: servicesErrors.length > 0 ? servicesErrors : undefined
+});
 
   } catch (error) {
     console.error('=== REGISTRATION ERROR ===');
@@ -442,6 +449,13 @@ app.post('/api/providers/register', async (req, res) => {
     });
   }
 });
+
+if (!password || password.length < 8) {
+  return res.status(400).json({
+    success: false,
+    error: 'Password must be at least 8 characters long'
+  });
+}
 
 // =================================
 // PROVIDER PROFILE ENDPOINTS
@@ -944,5 +958,6 @@ app.listen(PORT, () => {
 });
 
 module.exports = app;
+
 
 
