@@ -52,9 +52,11 @@ app.use((req, res, next) => {
   next();
 });
 
-// TEMPORARY: Allow all origins for debugging
+// SECURE: Production-ready CORS configuration
 app.use(cors({
-  origin: '*',
+  origin: process.env.NODE_ENV === 'production' 
+    ? ['https://zesty-entremet-6f685b.netlify.app'] 
+    : ['http://localhost:3000', 'http://127.0.0.1:5500'],
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization']
@@ -942,4 +944,5 @@ app.listen(PORT, () => {
 });
 
 module.exports = app;
+
 
