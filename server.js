@@ -824,6 +824,288 @@ app.get('/api/providers/:providerId/stats', authenticateToken, async (req, res) 
   }
 });
 
+app.post('/api/providers/export-calendar', authenticateToken, async (req, res) => {
+  try {
+    const { 
+      providerId, 
+      format, 
+      dateRange, 
+      includeBookings, 
+      includeBlocked, 
+      includePending, 
+      includeCustomer,
+      startDate,
+      endDate 
+    } = req.body;
+
+    if (!providerId || !format) {
+      return res.status(400).json({ 
+        success: false, 
+        error: 'Provider ID and format are required' 
+      });
+    }
+
+    // Calculate date range
+    let exportStartDate, exportEndDate;
+    const today = new Date();
+
+    if (dateRange === 'custom' && startDate && endDate) {
+      exportStartDate = startDate;
+      exportEndDate = endDate;
+    } else {
+      // Calculate based on dateRange
+      exportStartDate = today.toISOString().split('T')[0];
+      
+      switch (dateRange) {
+        case 'month':
+          exportEndDate = new Date(today.getFullYear(), today.getMonth() + 1, 0).toISOString().split('T')[0];
+          break;
+        case '3months':
+          exportEndDate = new Date(today.getTime() + 90 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+          break;
+        case '6months':
+          exportEndDate = new Date(today.getTime() + 180 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+          break;
+        case 'year':
+          exportEndDate = new Date(today.getFullYear() + 1, today.getMonth(), today.getDate()).toISOString().split('T')[0];
+          break;
+        default:
+          exportEndDate = new Date(today.getTime() + 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+      }
+    }
+
+    // Fetch calendar data
+    const calendarData = await fetchCalendarDataForExport(
+      providerId, 
+      exportStartDate, 
+      exportEndDate, 
+      { includeBookings, includeBlocked, includePending }
+    );
+
+    // Generate export based on format
+    let exportContent, contentType, filename;
+
+    switch (format) {
+      case 'ics':
+        exportContent = generateICSContent(calendarData, includeCustomer);
+        contentType = 'text/calendar';
+        filename = `calendar_export_${today.toISOString().split('T')[0]}.ics`;
+        break;
+        
+      case 'csv':
+        exportContent = generateCSVContent(calendarData, includeCustomer);
+        contentType = 'text/csv';
+        filename = `calendar_export_${today.toISOString().split('T')[0]}.csv`;
+        break;
+        
+      case 'json':
+        exportContent = JSON.stringify(calendarData, null, 2);
+        contentType = 'application/json';
+        filename = `calendar_export_${today.toISOString().split('T')[0]}.json`;
+        break;
+        
+      case 'pdf':
+        // For PDF, we'll return a simple text format for now
+        exportContent = generateTextContent(calendarData, includeCustomer);
+        contentType = 'text/plain';
+        filename = `calendar_export_${today.toISOString().split('T')[0]}.txt`;
+        break;
+        
+      default:
+        return res.status(400).json({ success: false, error: 'Unsupported export format' });
+    }
+
+    // Set headers for file download
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.setHeader('Content-Type', contentType);
+    
+    res.send(exportContent);
+
+  } catch (error) {
+    console.error('Calendar export error:', error);
+    res.status(500).json({ success: false, error: 'Failed to export calendar: ' + error.message });
+  }
+});
+
+// Helper function to fetch calendar data
+async function fetchCalendarDataForExport(providerId, startDate, endDate, options) {
+  const data = { bookings: [], blockedSlots: [] };
+
+  // Fetch bookings
+  if (options.includeBookings || options.includePending) {
+    const statusFilter = [];
+    if (options.includeBookings) statusFilter.push('confirmed', 'completed');
+    if (options.includePending) statusFilter.push('pending');
+
+    const { data: bookings, error: bookingsError } = await supabase
+      .from('bookings')
+      .select('*, services(name), users(full_name, email, phone)')
+      .eq('provider_id', providerId)
+      .gte('booking_date', startDate)
+      .lte('booking_date', endDate)
+      .in('status', statusFilter)
+      .order('booking_date')
+      .order('booking_time');
+
+    if (!bookingsError) {
+      data.bookings = bookings || [];
+    }
+  }
+
+  // Fetch blocked slots
+  if (options.includeBlocked) {
+    const { data: blockedSlots, error: slotsError } = await supabase
+      .from('calendar_slots')
+      .select('*')
+      .eq('provider_id', providerId)
+      .gte('date', startDate)
+      .lte('date', endDate)
+      .in('status', ['blocked', 'break']);
+
+    if (!slotsError) {
+      data.blockedSlots = blockedSlots || [];
+    }
+  }
+
+  return data;
+}
+
+// Generate ICS (iCalendar) format
+function generateICSContent(calendarData, includeCustomer) {
+  let ics = `BEGIN:VCALENDAR
+VERSION:2.0
+PRODID:-//Need a Service//Calendar Export//EN
+CALSCALE:GREGORIAN
+METHOD:PUBLISH
+`;
+
+  // Add bookings
+  calendarData.bookings.forEach(booking => {
+    const startDateTime = new Date(`${booking.booking_date}T${booking.booking_time}`);
+    const endDateTime = new Date(startDateTime.getTime() + (booking.service_duration || 60) * 60000);
+    
+    const formatDate = (date) => date.toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z';
+    
+    let summary = booking.services?.name || 'Service Booking';
+    let description = `Status: ${booking.status}`;
+    
+    if (includeCustomer && booking.users) {
+      summary += ` - ${booking.users.full_name}`;
+      description += `\\nCustomer: ${booking.users.full_name}`;
+      if (booking.users.email) description += `\\nEmail: ${booking.users.email}`;
+      if (booking.users.phone) description += `\\nPhone: ${booking.users.phone}`;
+    }
+
+    ics += `BEGIN:VEVENT
+UID:booking-${booking.id}@need-a-service.com
+DTSTART:${formatDate(startDateTime)}
+DTEND:${formatDate(endDateTime)}
+SUMMARY:${summary}
+DESCRIPTION:${description}
+STATUS:${booking.status.toUpperCase()}
+END:VEVENT
+`;
+  });
+
+  // Add blocked slots
+  calendarData.blockedSlots.forEach(slot => {
+    const startDateTime = new Date(`${slot.date}T${slot.start_time}`);
+    const endDateTime = new Date(`${slot.date}T${slot.end_time}`);
+    
+    const formatDate = (date) => date.toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z';
+
+    ics += `BEGIN:VEVENT
+UID:blocked-${slot.id}@need-a-service.com
+DTSTART:${formatDate(startDateTime)}
+DTEND:${formatDate(endDateTime)}
+SUMMARY:${slot.title || 'Blocked Time'}
+DESCRIPTION:${slot.description || 'Time blocked from bookings'}
+STATUS:TENTATIVE
+END:VEVENT
+`;
+  });
+
+  ics += 'END:VCALENDAR';
+  return ics;
+}
+
+// Generate CSV format
+function generateCSVContent(calendarData, includeCustomer) {
+  let csv = 'Date,Time,Type,Title,Duration,Status';
+  if (includeCustomer) csv += ',Customer Name,Customer Email,Customer Phone';
+  csv += '\n';
+
+  // Add bookings
+  calendarData.bookings.forEach(booking => {
+    let row = [
+      booking.booking_date,
+      booking.booking_time,
+      'Booking',
+      booking.services?.name || 'Service',
+      `${booking.service_duration || 60} minutes`,
+      booking.status
+    ];
+
+    if (includeCustomer) {
+      row.push(
+        booking.users?.full_name || '',
+        booking.users?.email || '',
+        booking.users?.phone || ''
+      );
+    }
+
+    csv += row.map(field => `"${field}"`).join(',') + '\n';
+  });
+
+  // Add blocked slots
+  calendarData.blockedSlots.forEach(slot => {
+    let row = [
+      slot.date,
+      slot.start_time,
+      'Blocked',
+      slot.title || 'Blocked Time',
+      `${slot.duration || 60} minutes`,
+      slot.status
+    ];
+
+    if (includeCustomer) {
+      row.push('', '', ''); // Empty customer fields for blocked slots
+    }
+
+    csv += row.map(field => `"${field}"`).join(',') + '\n';
+  });
+
+  return csv;
+}
+
+// Generate text format (for PDF placeholder)
+function generateTextContent(calendarData, includeCustomer) {
+  let content = 'CALENDAR EXPORT\n';
+  content += '===============\n\n';
+
+  content += 'BOOKINGS:\n';
+  content += '---------\n';
+  calendarData.bookings.forEach(booking => {
+    content += `${booking.booking_date} ${booking.booking_time} - ${booking.services?.name || 'Service'}\n`;
+    content += `  Status: ${booking.status}\n`;
+    if (includeCustomer && booking.users) {
+      content += `  Customer: ${booking.users.full_name}\n`;
+      if (booking.users.email) content += `  Email: ${booking.users.email}\n`;
+      if (booking.users.phone) content += `  Phone: ${booking.users.phone}\n`;
+    }
+    content += '\n';
+  });
+
+  content += '\nBLOCKED TIMES:\n';
+  content += '--------------\n';
+  calendarData.blockedSlots.forEach(slot => {
+    content += `${slot.date} ${slot.start_time} - ${slot.title || 'Blocked Time'}\n`;
+    content += `  Reason: ${slot.description || 'Time blocked'}\n\n`;
+  });
+
+  return content;
+}
+
 // =================================
 // BOOKING ENDPOINTS
 // =================================
@@ -1019,3 +1301,4 @@ app.listen(PORT, () => {
 });
 
 module.exports = app;
+
