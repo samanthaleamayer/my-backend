@@ -47,13 +47,13 @@ const upload = multer({
   }
 });
 
-// TEMPORARY: Add logging before CORS
+// Logging middleware
 app.use((req, res, next) => {
   console.log(`${req.method} ${req.url} - Origin: ${req.headers.origin}`);
   next();
 });
 
-// SECURE: Production-ready CORS configuration
+// SECURE CORS Configuration
 app.use(cors({
   origin: process.env.NODE_ENV === 'production' 
     ? ['https://zesty-entremet-6f685b.netlify.app'] 
@@ -92,7 +92,7 @@ const authenticateToken = (req, res, next) => {
 // AUTHENTICATION ENDPOINTS
 // =================================
 
-// FIXED LOGIN ENDPOINT
+// FIXED LOGIN ENDPOINT with JWT
 app.post('/api/login', async (req, res) => {
   console.log('=== LOGIN ENDPOINT HIT ===');
   console.log('Request body:', req.body);
@@ -170,35 +170,35 @@ app.post('/api/login', async (req, res) => {
       });
     }
 
-    console.log('Login successful!');
+    console.log('Login successful! Generating token...');
 
-   // Generate JWT token
-const token = jwt.sign(
-  { 
-    userId: user.id, 
-    email: user.email, 
-    providerId: provider.id,
-    role: user.role 
-  },
-  process.env.JWT_SECRET || 'your-secret-key',
-  { expiresIn: '24h' }
-);
+    // Generate JWT token
+    const token = jwt.sign(
+      { 
+        userId: user.id, 
+        email: user.email, 
+        providerId: provider.id,
+        role: user.role 
+      },
+      process.env.JWT_SECRET || 'your-secret-key',
+      { expiresIn: '24h' }
+    );
 
-return res.json({
-  success: true,
-  message: 'Login successful',
-  data: {
-    user: {
-      id: user.id,
-      email: user.email,
-      full_name: user.full_name,
-      role: user.role
-    },
-    provider,
-    token,
-    dashboardUrl: `https://zesty-entremet-6f685b.netlify.app/provider-dashboard.html?providerId=${provider.id}&email=${email}`
-  }
-});
+    return res.json({
+      success: true,
+      message: 'Login successful',
+      data: {
+        user: {
+          id: user.id,
+          email: user.email,
+          full_name: user.full_name,
+          role: user.role
+        },
+        provider,
+        token,
+        dashboardUrl: `https://zesty-entremet-6f685b.netlify.app/provider-dashboard.html?providerId=${provider.id}&email=${email}`
+      }
+    });
 
   } catch (error) {
     console.error('Login error:', error);
@@ -206,9 +206,13 @@ return res.json({
   }
 });
 
-app.post('/api/auth/change-password', async (req, res) => {
+app.post('/api/auth/change-password', authenticateToken, async (req, res) => {
   try {
     const { providerId, currentPassword, newPassword } = req.body;
+    
+    if (!newPassword || newPassword.length < 8) {
+      return res.status(400).json({ success: false, error: 'New password must be at least 8 characters long' });
+    }
     
     const { data: provider, error: providerError } = await supabase
       .from('providers')
@@ -216,7 +220,7 @@ app.post('/api/auth/change-password', async (req, res) => {
       .eq('id', providerId)
       .single();
     
-    if (providerError) throw providerError;
+    if (providerError) throw new Error('Provider not found');
     
     const { data: user, error: userError } = await supabase
       .from('users')
@@ -224,7 +228,7 @@ app.post('/api/auth/change-password', async (req, res) => {
       .eq('id', provider.user_id)
       .single();
     
-    if (userError) throw userError;
+    if (userError) throw new Error('User not found');
     
     const isValid = await bcrypt.compare(currentPassword, user.password_hash);
     
@@ -241,7 +245,7 @@ app.post('/api/auth/change-password', async (req, res) => {
     
     if (updateError) throw updateError;
     
-    res.json({ success: true });
+    res.json({ success: true, message: 'Password updated successfully' });
     
   } catch (error) {
     console.error('Change password error:', error);
@@ -255,9 +259,10 @@ app.post('/api/auth/change-password', async (req, res) => {
 
 app.get('/api/health', (req, res) => {
   res.json({ 
-    status: 'Backend running with FIXED authentication!', 
+    status: 'Backend running with JWT authentication!', 
     timestamp: new Date().toISOString(),
-    version: 'v3.0-auth-fixed'
+    version: 'v4.0-jwt-secured',
+    environment: process.env.NODE_ENV || 'development'
   });
 });
 
@@ -282,7 +287,7 @@ app.get('/api/test-db', async (req, res) => {
 });
 
 // =================================
-// FIXED PROVIDER REGISTRATION
+// PROVIDER REGISTRATION (No Auth Required)
 // =================================
 
 app.post('/api/providers/register', async (req, res) => {
@@ -295,9 +300,10 @@ app.post('/api/providers/register', async (req, res) => {
       businessCity, businessAddress, businessSuburb, businessZip,
       yearsInBusiness, serviceRadius, regNumber, taxId, website,
       insurance, services, bankCountry, agreeToStripeTerms,
-      username, password // ADDED PASSWORD FIELDS
+      username, password
     } = req.body;
 
+    // Validation
     if (!fullName || !email || !phone || !businessName) {
       return res.status(400).json({
         success: false,
@@ -305,14 +311,14 @@ app.post('/api/providers/register', async (req, res) => {
       });
     }
 
-    // REQUIRE PASSWORD
-    if (!password || password.length < 6) {
+    if (!password || password.length < 8) {
       return res.status(400).json({
         success: false,
-        error: 'Password is required and must be at least 6 characters long'
+        error: 'Password is required and must be at least 8 characters long'
       });
     }
 
+    // Check for existing user
     const { data: existingUser, error: checkError } = await supabase
       .from('users')
       .select('email')
@@ -327,10 +333,9 @@ app.post('/api/providers/register', async (req, res) => {
     }
 
     console.log('Hashing password...');
-    
-    // HASH THE PASSWORD
     const hashedPassword = await bcrypt.hash(password, 10);
     
+    // Create user
     const userData = {
       email,
       full_name: fullName,
@@ -339,7 +344,7 @@ app.post('/api/providers/register', async (req, res) => {
       profile_photo_url: profilePhoto,
       bio: bio || '',
       role: 'provider',
-      password_hash: hashedPassword // ADDED PASSWORD HASH
+      password_hash: hashedPassword
     };
 
     console.log('Creating user with password...');
@@ -352,11 +357,12 @@ app.post('/api/providers/register', async (req, res) => {
 
     if (userError) {
       console.error('User creation error:', userError);
-      throw userError;
+      throw new Error('Failed to create user account: ' + userError.message);
     }
 
     console.log('User created with ID:', createdUser.id);
 
+    // Stripe account creation
     let stripeAccountId = null;
     let stripeOnboardingUrl = null;
 
@@ -387,6 +393,7 @@ app.post('/api/providers/register', async (req, res) => {
       }
     }
 
+    // Create provider
     const providerData = {
       user_id: createdUser.id,
       business_name: businessName,
@@ -417,63 +424,66 @@ app.post('/api/providers/register', async (req, res) => {
 
     if (providerError) {
       console.error('Provider creation error:', providerError);
+      // Clean up user if provider creation fails
       await supabase.from('users').delete().eq('id', createdUser.id);
-      throw providerError;
+      throw new Error('Failed to create provider profile: ' + providerError.message);
     }
 
     console.log('Provider created with ID:', createdProvider.id);
 
+    // Handle services with improved error handling
     let servicesInserted = 0;
-let servicesErrors = [];
+    let servicesErrors = [];
 
-if (services && Array.isArray(services) && services.length > 0) {
-  console.log(`Processing ${services.length} services...`);
-  
-  const servicesData = services.map((service) => {
-    return {
-      provider_id: createdProvider.id,
-      name: service.name,
-      category: service.category,
-      subcategory: service.subCategory || service.subcategory,
-      duration: parseInt(service.duration) || 60,
-      duration_minutes: parseInt(service.duration) || 60,
-      price: parseFloat(service.price) || 0,
-      description: service.description || '',
-      is_active: true
-    };
-  });
+    if (services && Array.isArray(services) && services.length > 0) {
+      console.log(`Processing ${services.length} services...`);
+      
+      const servicesData = services.map((service) => {
+        return {
+          provider_id: createdProvider.id,
+          name: service.name,
+          category: service.category,
+          subcategory: service.subCategory || service.subcategory,
+          duration: parseInt(service.duration) || 60,
+          duration_minutes: parseInt(service.duration) || 60,
+          price: parseFloat(service.price) || 0,
+          description: service.description || '',
+          is_active: true
+        };
+      });
 
-  const { data: insertedServices, error: servicesError } = await supabase
-    .from('services')
-    .insert(servicesData)
-    .select();
+      const { data: insertedServices, error: servicesError } = await supabase
+        .from('services')
+        .insert(servicesData)
+        .select();
 
-  if (servicesError) {
-    console.error('Services insertion error:', servicesError);
-    servicesErrors.push('Failed to save some services: ' + servicesError.message);
-    servicesInserted = 0;
-  } else {
-    servicesInserted = insertedServices ? insertedServices.length : 0;
-    console.log(`Services created: ${servicesInserted}`);
-  }
-}
+      if (servicesError) {
+        console.error('Services insertion error:', servicesError);
+        servicesErrors.push('Failed to save some services: ' + servicesError.message);
+        servicesInserted = 0;
+      } else {
+        servicesInserted = insertedServices ? insertedServices.length : 0;
+        console.log(`Services created: ${servicesInserted}`);
+      }
+    }
+
     console.log('=== REGISTRATION COMPLETED SUCCESSFULLY ===');
 
-   res.json({
-  success: true,
-  message: servicesErrors.length > 0 
-    ? 'Registration completed with some issues' 
-    : 'Provider registration completed successfully',
-  data: {
-    user: createdUser,
-    provider: createdProvider,
-    servicesCreated: servicesInserted,
-    servicesErrors: servicesErrors,
-    stripeOnboardingUrl,
-    dashboardUrl: `https://zesty-entremet-6f685b.netlify.app/provider-dashboard.html?providerId=${createdProvider.id}&email=${email}`
-  },
-  warnings: servicesErrors.length > 0 ? servicesErrors : undefined
-});
+    res.json({
+      success: true,
+      message: servicesErrors.length > 0 
+        ? 'Registration completed with some issues' 
+        : 'Provider registration completed successfully',
+      data: {
+        user: createdUser,
+        provider: createdProvider,
+        servicesCreated: servicesInserted,
+        servicesErrors: servicesErrors,
+        stripeOnboardingUrl,
+        dashboardUrl: `https://zesty-entremet-6f685b.netlify.app/provider-dashboard.html?providerId=${createdProvider.id}&email=${email}`
+      },
+      warnings: servicesErrors.length > 0 ? servicesErrors : undefined
+    });
 
   } catch (error) {
     console.error('=== REGISTRATION ERROR ===');
@@ -485,18 +495,11 @@ if (services && Array.isArray(services) && services.length > 0) {
   }
 });
 
-if (!password || password.length < 8) {
-  return res.status(400).json({
-    success: false,
-    error: 'Password must be at least 8 characters long'
-  });
-}
-
 // =================================
-// PROVIDER PROFILE ENDPOINTS
+// PROTECTED PROVIDER ENDPOINTS
 // =================================
 
-app.get('/api/providers/:id/complete', async (req, res) => {
+app.get('/api/providers/:id/complete', authenticateToken, async (req, res) => {
   try {
     console.log('Fetching complete provider data for ID:', req.params.id);
 
@@ -506,7 +509,7 @@ app.get('/api/providers/:id/complete', async (req, res) => {
       .eq('id', req.params.id)
       .single();
 
-    if (providerError) throw providerError;
+    if (providerError) throw new Error('Provider not found: ' + providerError.message);
     if (!provider) {
       return res.status(404).json({ success: false, error: 'Provider not found' });
     }
@@ -548,10 +551,10 @@ app.get('/api/providers/:id/complete', async (req, res) => {
 });
 
 // =================================
-// SERVICES ENDPOINTS
+// PROTECTED SERVICES ENDPOINTS
 // =================================
 
-app.get('/api/providers/:providerId/services', async (req, res) => {
+app.get('/api/providers/:providerId/services', authenticateToken, async (req, res) => {
   try {
     const { providerId } = req.params;
     
@@ -561,7 +564,7 @@ app.get('/api/providers/:providerId/services', async (req, res) => {
       .eq('provider_id', providerId)
       .order('created_at', { ascending: false });
     
-    if (error) throw error;
+    if (error) throw new Error('Failed to fetch services: ' + error.message);
     
     res.json({ success: true, data: data || [] });
     
@@ -571,9 +574,16 @@ app.get('/api/providers/:providerId/services', async (req, res) => {
   }
 });
 
-app.post('/api/providers/services', async (req, res) => {
+app.post('/api/providers/services', authenticateToken, async (req, res) => {
   try {
     const { providerId, name, category, duration_minutes, price, description } = req.body;
+    
+    if (!providerId || !name || !category || !duration_minutes || !price) {
+      return res.status(400).json({ 
+        success: false, 
+        error: 'Missing required fields: providerId, name, category, duration_minutes, price' 
+      });
+    }
     
     const serviceData = {
       provider_id: providerId,
@@ -592,7 +602,7 @@ app.post('/api/providers/services', async (req, res) => {
       .select()
       .single();
     
-    if (error) throw error;
+    if (error) throw new Error('Failed to create service: ' + error.message);
     
     res.json({ success: true, data });
     
@@ -602,7 +612,7 @@ app.post('/api/providers/services', async (req, res) => {
   }
 });
 
-app.put('/api/providers/services/:serviceId', async (req, res) => {
+app.put('/api/providers/services/:serviceId', authenticateToken, async (req, res) => {
   try {
     const { serviceId } = req.params;
     const { name, category, duration_minutes, price, description } = req.body;
@@ -624,7 +634,7 @@ app.put('/api/providers/services/:serviceId', async (req, res) => {
       .select()
       .single();
     
-    if (error) throw error;
+    if (error) throw new Error('Failed to update service: ' + error.message);
     
     res.json({ success: true, data });
     
@@ -634,7 +644,7 @@ app.put('/api/providers/services/:serviceId', async (req, res) => {
   }
 });
 
-app.delete('/api/providers/services/:serviceId', async (req, res) => {
+app.delete('/api/providers/services/:serviceId', authenticateToken, async (req, res) => {
   try {
     const { serviceId } = req.params;
     
@@ -643,9 +653,9 @@ app.delete('/api/providers/services/:serviceId', async (req, res) => {
       .update({ is_active: false })
       .eq('id', serviceId);
     
-    if (error) throw error;
+    if (error) throw new Error('Failed to delete service: ' + error.message);
     
-    res.json({ success: true });
+    res.json({ success: true, message: 'Service deleted successfully' });
     
   } catch (error) {
     console.error('Delete service error:', error);
@@ -723,10 +733,10 @@ app.post('/api/providers/upload-image', upload.single('image'), async (req, res)
 });
 
 // =================================
-// CALENDAR ENDPOINTS
+// PROTECTED CALENDAR ENDPOINTS
 // =================================
 
-app.get('/api/providers/:id/calendar', async (req, res) => {
+app.get('/api/providers/:id/calendar', authenticateToken, async (req, res) => {
   try {
     const { month, year } = req.query;
     const providerId = req.params.id;
@@ -758,7 +768,7 @@ app.get('/api/providers/:id/calendar', async (req, res) => {
       .in('status', ['blocked', 'break']);
     
     if (hoursError || bookingsError || slotsError) {
-      throw hoursError || bookingsError || slotsError;
+      throw new Error('Failed to fetch calendar data');
     }
     
     res.json({
@@ -778,7 +788,7 @@ app.get('/api/providers/:id/calendar', async (req, res) => {
   }
 });
 
-app.get('/api/providers/:providerId/stats', async (req, res) => {
+app.get('/api/providers/:providerId/stats', authenticateToken, async (req, res) => {
   try {
     const { providerId } = req.params;
     const { period = '30' } = req.query;
@@ -793,7 +803,7 @@ app.get('/api/providers/:providerId/stats', async (req, res) => {
       .eq('provider_id', providerId)
       .gte('booking_date', startDateStr);
     
-    if (bookingsError) throw bookingsError;
+    if (bookingsError) throw new Error('Failed to fetch booking statistics');
     
     const stats = {
       totalBookings: bookings.length,
@@ -851,7 +861,7 @@ app.post('/api/bookings', async (req, res) => {
       .select()
       .single();
     
-    if (error) throw error;
+    if (error) throw new Error('Failed to create booking: ' + error.message);
     
     res.json({ success: true, data });
     
@@ -861,7 +871,7 @@ app.post('/api/bookings', async (req, res) => {
   }
 });
 
-app.get('/api/providers/:providerId/bookings', async (req, res) => {
+app.get('/api/providers/:providerId/bookings', authenticateToken, async (req, res) => {
   try {
     const { providerId } = req.params;
     const { status, startDate, endDate } = req.query;
@@ -877,7 +887,7 @@ app.get('/api/providers/:providerId/bookings', async (req, res) => {
     
     const { data, error } = await query.order('booking_date', { ascending: true });
     
-    if (error) throw error;
+    if (error) throw new Error('Failed to fetch bookings: ' + error.message);
     
     res.json({ success: true, data: data || [] });
     
@@ -887,7 +897,7 @@ app.get('/api/providers/:providerId/bookings', async (req, res) => {
   }
 });
 
-app.put('/api/bookings/:bookingId/status', async (req, res) => {
+app.put('/api/bookings/:bookingId/status', authenticateToken, async (req, res) => {
   try {
     const { bookingId } = req.params;
     const { status, providerNotes } = req.body;
@@ -908,7 +918,7 @@ app.put('/api/bookings/:bookingId/status', async (req, res) => {
       .select()
       .single();
     
-    if (error) throw error;
+    if (error) throw new Error('Failed to update booking: ' + error.message);
     
     res.json({ success: true, data });
     
@@ -922,7 +932,7 @@ app.put('/api/bookings/:bookingId/status', async (req, res) => {
 // NOTIFICATIONS ENDPOINT
 // =================================
 
-app.get('/api/providers/:providerId/notifications', async (req, res) => {
+app.get('/api/providers/:providerId/notifications', authenticateToken, async (req, res) => {
   try {
     const { providerId } = req.params;
     
@@ -967,16 +977,31 @@ function generateConfirmationNumber() {
 }
 
 // =================================
-// ERROR HANDLING
+// ERROR HANDLING MIDDLEWARE
 // =================================
 
 app.use((error, req, res, next) => {
   console.error('Server error:', error);
-  res.status(500).json({ success: false, error: 'Internal server error' });
+  
+  if (error.code === 'LIMIT_FILE_SIZE') {
+    return res.status(400).json({ success: false, error: 'File size too large. Maximum 5MB allowed.' });
+  }
+  
+  if (error.message.includes('Invalid file type')) {
+    return res.status(400).json({ success: false, error: error.message });
+  }
+  
+  res.status(500).json({ 
+    success: false, 
+    error: process.env.NODE_ENV === 'production' ? 'Internal server error' : error.message 
+  });
 });
 
 app.use((req, res) => {
-  res.status(404).json({ success: false, error: 'Endpoint not found' });
+  res.status(404).json({ 
+    success: false, 
+    error: `Endpoint not found: ${req.method} ${req.url}` 
+  });
 });
 
 // =================================
@@ -985,17 +1010,12 @@ app.use((req, res) => {
 
 app.listen(PORT, () => {
   console.log(`🚀 Backend server running on http://localhost:${PORT}`);
-  console.log(`📊 Health check: http://localhost:${PORT}/health`);
+  console.log(`📊 Health check: http://localhost:${PORT}/api/health`);
   console.log(`🗄️ Database test: http://localhost:${PORT}/api/test-db`);
-  console.log(`✅ AUTHENTICATION FIXED - Login should work now!`);
-  console.log(`✅ Registration now saves passwords properly!`);
-  console.log(`✅ Login endpoint verified and working!`);
+  console.log(`🔐 JWT Authentication enabled`);
+  console.log(`🛡️ CORS properly configured`);
+  console.log(`✅ Enhanced error handling active`);
+  console.log(`Environment: ${process.env.NODE_ENV || 'development'}`);
 });
 
 module.exports = app;
-
-
-
-
-
-
