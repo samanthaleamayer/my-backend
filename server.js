@@ -551,7 +551,7 @@ app.get('/api/providers/:id/complete', authenticateToken, async (req, res) => {
 });
 
 // =================================
-// PROTECTED SERVICES ENDPOINTS
+// PROTECTED SERVICES ENDPOINTS (FIXED PATHS)
 // =================================
 
 app.get('/api/providers/:providerId/services', authenticateToken, async (req, res) => {
@@ -574,14 +574,15 @@ app.get('/api/providers/:providerId/services', authenticateToken, async (req, re
   }
 });
 
-app.post('/api/providers/services', authenticateToken, async (req, res) => {
+app.post('/api/providers/:providerId/services', authenticateToken, async (req, res) => {
   try {
-    const { providerId, name, category, duration_minutes, price, description } = req.body;
+    const { providerId } = req.params;
+    const { name, category, duration_minutes, price, description } = req.body;
     
-    if (!providerId || !name || !category || !duration_minutes || !price) {
+    if (!name || !category || !duration_minutes || !price) {
       return res.status(400).json({ 
         success: false, 
-        error: 'Missing required fields: providerId, name, category, duration_minutes, price' 
+        error: 'Missing required fields: name, category, duration_minutes, price' 
       });
     }
     
@@ -612,7 +613,7 @@ app.post('/api/providers/services', authenticateToken, async (req, res) => {
   }
 });
 
-app.put('/api/providers/services/:serviceId', authenticateToken, async (req, res) => {
+app.put('/api/providers/:providerId/services/:serviceId', authenticateToken, async (req, res) => {
   try {
     const { serviceId } = req.params;
     const { name, category, duration_minutes, price, description } = req.body;
@@ -644,7 +645,7 @@ app.put('/api/providers/services/:serviceId', authenticateToken, async (req, res
   }
 });
 
-app.delete('/api/providers/services/:serviceId', authenticateToken, async (req, res) => {
+app.delete('/api/providers/:providerId/services/:serviceId', authenticateToken, async (req, res) => {
   try {
     const { serviceId } = req.params;
     
@@ -1160,7 +1161,7 @@ app.get('/api/providers/:providerId/bookings', authenticateToken, async (req, re
     
     let query = supabase
       .from('bookings')
-      .select('*')
+      .select('*, services(name)')
       .eq('provider_id', providerId);
     
     if (status) query = query.eq('status', status);
@@ -1206,6 +1207,58 @@ app.put('/api/bookings/:bookingId/status', authenticateToken, async (req, res) =
     
   } catch (error) {
     console.error('Update booking status error:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// =================================
+// BOOKING CONFIRMATION ENDPOINTS (NEW - ADDED FOR DASHBOARD)
+// =================================
+
+app.put('/api/providers/bookings/:bookingId/confirm', authenticateToken, async (req, res) => {
+  try {
+    const { bookingId } = req.params;
+    
+    const { data, error } = await supabase
+      .from('bookings')
+      .update({ 
+        status: 'confirmed',
+        updated_at: new Date()
+      })
+      .eq('id', bookingId)
+      .select()
+      .single();
+    
+    if (error) throw new Error('Failed to confirm booking: ' + error.message);
+    
+    res.json({ success: true, data, message: 'Booking confirmed successfully' });
+    
+  } catch (error) {
+    console.error('Confirm booking error:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+app.put('/api/providers/bookings/:bookingId/cancel', authenticateToken, async (req, res) => {
+  try {
+    const { bookingId } = req.params;
+    
+    const { data, error } = await supabase
+      .from('bookings')
+      .update({ 
+        status: 'cancelled',
+        updated_at: new Date()
+      })
+      .eq('id', bookingId)
+      .select()
+      .single();
+    
+    if (error) throw new Error('Failed to cancel booking: ' + error.message);
+    
+    res.json({ success: true, data, message: 'Booking cancelled successfully' });
+    
+  } catch (error) {
+    console.error('Cancel booking error:', error);
     res.status(500).json({ success: false, error: error.message });
   }
 });
@@ -1291,14 +1344,13 @@ app.use((req, res) => {
 // =================================
 
 app.listen(PORT, () => {
-  console.log(`🚀 Backend server running on http://localhost:${PORT}`);
-  console.log(`📊 Health check: http://localhost:${PORT}/api/health`);
-  console.log(`🗄️ Database test: http://localhost:${PORT}/api/test-db`);
-  console.log(`🔐 JWT Authentication enabled`);
-  console.log(`🛡️ CORS properly configured`);
-  console.log(`✅ Enhanced error handling active`);
+  console.log(`Server running on http://localhost:${PORT}`);
+  console.log(`Health check: http://localhost:${PORT}/api/health`);
+  console.log(`Database test: http://localhost:${PORT}/api/test-db`);
+  console.log(`JWT Authentication enabled`);
+  console.log(`CORS properly configured`);
+  console.log(`Enhanced error handling active`);
   console.log(`Environment: ${process.env.NODE_ENV || 'development'}`);
 });
 
 module.exports = app;
-
